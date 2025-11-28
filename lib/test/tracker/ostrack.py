@@ -24,6 +24,8 @@ class OSTrack(BaseTracker):
         self.cfg = params.cfg
         self.network = network.cuda()
         self.network.eval()
+        if hasattr(self.network, 'reset_memory'):
+            self.network.reset_memory()
         self.preprocessor = Preprocessor()
         self.state = None
 
@@ -65,6 +67,8 @@ class OSTrack(BaseTracker):
         # save states
         self.state = info['init_bbox']
         self.frame_id = 0
+        if hasattr(self.network, 'reset_memory'):
+            self.network.reset_memory()
         if self.save_all_boxes:
             '''save all predicted boxes'''
             all_boxes_save = info['init_bbox'] * self.cfg.MODEL.NUM_OBJECT_QUERIES
@@ -76,13 +80,15 @@ class OSTrack(BaseTracker):
         x_patch_arr, resize_factor, x_amask_arr = sample_target(image, self.state, self.params.search_factor,
                                                                 output_sz=self.params.search_size)  # (x1, y1, w, h)
         search = self.preprocessor.process(x_patch_arr, x_amask_arr)
+        reset_flag = self.frame_id == 1
 
         with torch.no_grad():
             x_dict = search
             # merge the template and the search
             # run the transformer
             out_dict = self.network.forward(
-                template=self.z_dict1.tensors, search=x_dict.tensors, ce_template_mask=self.box_mask_z)
+                template=self.z_dict1.tensors, search=x_dict.tensors, ce_template_mask=self.box_mask_z,
+                use_memory=True, reset_memory=reset_flag)
 
         # add hann windows
         pred_score_map = out_dict['score_map']
