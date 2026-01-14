@@ -34,6 +34,10 @@ class BaseBackbone(nn.Module):
         self.add_cls_token = False
         self.add_sep_seg = False
 
+        self.memory_tokens = 0
+        self.mem_token_embed = None
+        self.read_mem_embed = None
+
     def finetune_track(self, cfg, patch_start_index=1):
 
         search_size = to_2tuple(cfg.DATA.SEARCH.SIZE)
@@ -107,7 +111,28 @@ class BaseBackbone(nn.Module):
                     layer_name = f'norm{i_layer}'
                     self.add_module(layer_name, layer)
 
-    def forward_features(self, z, x):
+        memory_cfg = getattr(cfg.MODEL, "MEMORY", None)
+        mem_enabled = getattr(memory_cfg, "ENABLED", False) if memory_cfg is not None else False
+        mem_k = int(getattr(memory_cfg, "NUM_TOKENS", 0)) if memory_cfg is not None else 0
+        self.memory_tokens = mem_k if mem_enabled and mem_k > 0 else 0
+        if self.memory_tokens > 0:
+            self.mem_token_embed = nn.Parameter(torch.zeros(1, self.memory_tokens, self.embed_dim))
+            trunc_normal_(self.mem_token_embed, std=.02)
+            self.read_mem_embed = nn.Parameter(torch.zeros(1, self.memory_tokens, self.embed_dim))
+            trunc_normal_(self.read_mem_embed, std=.02)
+        else:
+            self.mem_token_embed = None
+            self.read_mem_embed = None
+
+    def init_memory(self, batch_size, device=None, dtype=None):
+        mem = self.mem_token_embed
+        if device is not None:
+            mem = mem.to(device=device)
+        if dtype is not None:
+            mem = mem.to(dtype=dtype)
+        return mem.expand(batch_size, -1, -1)
+
+    def forward_features(self, z, x, mem_tokens=None):
         B, H, W = x.shape[0], x.shape[2], x.shape[3]
 
         x = self.patch_embed(x)
@@ -130,17 +155,29 @@ class BaseBackbone(nn.Module):
 
         x = self.pos_drop(x)
 
+        mem_out = None
+        if self.memory_tokens > 0:
+            if mem_tokens is None:
+                mem_tokens = self.init_memory(B, device=x.device, dtype=x.dtype)
+            if self.read_mem_embed is not None:
+                mem_tokens = mem_tokens + self.read_mem_embed.to(device=x.device, dtype=x.dtype)
+            x = torch.cat([mem_tokens, x], dim=1)
+
         for i, blk in enumerate(self.blocks):
             x = blk(x)
+
+        if self.memory_tokens > 0:
+            mem_out = x[:, :self.memory_tokens, :]
+            x = x[:, self.memory_tokens:, :]
 
         lens_z = self.pos_embed_z.shape[1]
         lens_x = self.pos_embed_x.shape[1]
         x = recover_tokens(x, lens_z, lens_x, mode=self.cat_mode)
 
-        aux_dict = {"attn": None}
+        aux_dict = {"attn": None, "memory_tokens": mem_out}
         return self.norm(x), aux_dict
 
-    def forward(self, z, x, **kwargs):
+    def forward(self, z, x, mem_tokens=None, **kwargs):
         """
         Joint feature extraction and relation modeling for the basic ViT backbone.
         Args:
@@ -151,6 +188,6 @@ class BaseBackbone(nn.Module):
             x (torch.Tensor): merged template and search region feature, [B, L_z+L_x, C]
             attn : None
         """
-        x, aux_dict = self.forward_features(z, x,)
+        x, aux_dict = self.forward_features(z, x, mem_tokens=mem_tokens,)
 
         return x, aux_dict

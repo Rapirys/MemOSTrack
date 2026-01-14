@@ -101,7 +101,8 @@ class VisionTransformerCE(VisionTransformer):
 
     def forward_features(self, z, x, mask_z=None, mask_x=None,
                          ce_template_mask=None, ce_keep_rate=None,
-                         return_last_attn=False
+                         return_last_attn=False,
+                         mem_tokens=None
                          ):
         B, H, W = x.shape[0], x.shape[2], x.shape[3]
 
@@ -137,8 +138,25 @@ class VisionTransformerCE(VisionTransformer):
 
         x = self.pos_drop(x)
 
+        mem_out = None
+        if self.memory_tokens > 0:
+            if mem_tokens is None:
+                mem_tokens = self.init_memory(B, device=x.device, dtype=x.dtype)
+            if self.read_mem_embed is not None:
+                mem_tokens = mem_tokens + self.read_mem_embed.to(device=x.device, dtype=x.dtype)
+            x = torch.cat([mem_tokens, x], dim=1)
+            if mask_x is not None:
+                mem_mask = torch.zeros([B, self.memory_tokens], device=x.device, dtype=mask_x.dtype)
+                mask_x = torch.cat([mem_mask, mask_x], dim=1)
+            if ce_template_mask is not None:
+                mem_ce_mask = torch.ones([B, self.memory_tokens], device=x.device, dtype=ce_template_mask.dtype)
+                ce_template_mask = torch.cat([mem_ce_mask, ce_template_mask], dim=1)
+
         lens_z = self.pos_embed_z.shape[1]
         lens_x = self.pos_embed_x.shape[1]
+
+        if self.memory_tokens > 0:
+            lens_z = lens_z + self.memory_tokens
 
         global_index_t = torch.linspace(0, lens_z - 1, lens_z).to(x.device)
         global_index_t = global_index_t.repeat(B, 1)
@@ -160,6 +178,11 @@ class VisionTransformerCE(VisionTransformer):
         z = x[:, :lens_z_new]
         x = x[:, lens_z_new:]
 
+        if self.memory_tokens > 0:
+            mem_out = z[:, :self.memory_tokens, :]
+            z = z[:, self.memory_tokens:, :]
+            lens_z_new = lens_z_new - self.memory_tokens
+
         if removed_indexes_s and removed_indexes_s[0] is not None:
             removed_indexes_cat = torch.cat(removed_indexes_s, dim=1)
 
@@ -180,15 +203,18 @@ class VisionTransformerCE(VisionTransformer):
         aux_dict = {
             "attn": attn,
             "removed_indexes_s": removed_indexes_s,  # used for visualization
+            "memory_tokens": mem_out,
         }
 
         return x, aux_dict
 
     def forward(self, z, x, ce_template_mask=None, ce_keep_rate=None,
                 tnc_keep_rate=None,
-                return_last_attn=False):
+                return_last_attn=False,
+                mem_tokens=None):
 
-        x, aux_dict = self.forward_features(z, x, ce_template_mask=ce_template_mask, ce_keep_rate=ce_keep_rate,)
+        x, aux_dict = self.forward_features(z, x, ce_template_mask=ce_template_mask, ce_keep_rate=ce_keep_rate,
+                                            mem_tokens=mem_tokens, )
 
         return x, aux_dict
 

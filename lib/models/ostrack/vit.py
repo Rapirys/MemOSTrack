@@ -188,7 +188,12 @@ class VisionTransformer(BaseBackbone):
 
     @torch.jit.ignore
     def no_weight_decay(self):
-        return {'pos_embed', 'cls_token', 'dist_token'}
+        nwd = {'pos_embed', 'cls_token', 'dist_token'}
+        if getattr(self, 'mem_token_embed', None) is not None:
+            nwd.add('mem_token_embed')
+        if getattr(self, 'read_mem_embed', None) is not None:
+            nwd.add('read_mem_embed')
+        return nwd
 
     def get_classifier(self):
         if self.dist_token is None:

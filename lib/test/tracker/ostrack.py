@@ -26,6 +26,7 @@ class OSTrack(BaseTracker):
         self.network.eval()
         self.preprocessor = Preprocessor()
         self.state = None
+        self.mem_tokens = None
 
         self.feat_sz = self.cfg.TEST.SEARCH_SIZE // self.cfg.MODEL.BACKBONE.STRIDE
         # motion constrain
@@ -62,6 +63,10 @@ class OSTrack(BaseTracker):
                                                         template.tensors.device).squeeze(1)
             self.box_mask_z = generate_mask_cond(self.cfg, 1, template.tensors.device, template_bbox)
 
+        self.mem_tokens = None
+        if hasattr(self.network, 'backbone') and hasattr(self.network.backbone, 'init_memory') and getattr(self.network.backbone, 'memory_tokens', 0) > 0:
+            self.mem_tokens = self.network.backbone.init_memory(1, device=template.tensors.device, dtype=template.tensors.dtype)
+
         # save states
         self.state = info['init_bbox']
         self.frame_id = 0
@@ -82,7 +87,10 @@ class OSTrack(BaseTracker):
             # merge the template and the search
             # run the transformer
             out_dict = self.network.forward(
-                template=self.z_dict1.tensors, search=x_dict.tensors, ce_template_mask=self.box_mask_z)
+                template=self.z_dict1.tensors, search=x_dict.tensors, ce_template_mask=self.box_mask_z, mem_tokens=self.mem_tokens)
+
+            if 'memory_tokens' in out_dict:
+                self.mem_tokens = out_dict['memory_tokens']
 
         # add hann windows
         pred_score_map = out_dict['score_map']

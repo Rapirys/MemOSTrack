@@ -66,11 +66,16 @@ class OSTrackActor(BaseActor):
         if len(template_list) == 1:
             template_list = template_list[0]
 
+        mem_tokens = None
+        if hasattr(self.net, 'backbone') and hasattr(self.net.backbone, 'init_memory') and getattr(self.net.backbone, 'memory_tokens', 0) > 0:
+            mem_tokens = self.net.backbone.init_memory(search_img.shape[0], device=search_img.device, dtype=search_img.dtype)
+
         out_dict = self.net(template=template_list,
                             search=search_img,
                             ce_template_mask=box_mask_z,
                             ce_keep_rate=ce_keep_rate,
-                            return_last_attn=False)
+                            return_last_attn=False,
+                            mem_tokens=mem_tokens)
 
         return out_dict
 
