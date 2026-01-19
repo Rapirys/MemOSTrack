@@ -246,3 +246,98 @@ def build_box_head(cfg, hidden_dim):
         return center_head
     else:
         raise ValueError("HEAD TYPE %s is not supported." % cfg.MODEL.HEAD_TYPE)
+
+
+class MemoryFilterHead(nn.Module):
+    """
+    Head that predicts a per-sample correlation filter kernel from memory tokens.
+
+    Intended usage:
+        - Input:  memory_tokens of shape (B, K, C)
+        - Output: filter kernel of shape (B, C, k, k)
+    The kernel can then be applied to search features with a grouped conv to
+    produce a DiMP-style response map.
+    """
+
+    def __init__(self, hidden_dim, num_mem_tokens, kernel_size=3,
+                 mlp_hidden_dim=None, num_layers=3, use_bn=False):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.num_mem_tokens = num_mem_tokens
+        self.kernel_size = kernel_size
+
+        if mlp_hidden_dim is None:
+            mlp_hidden_dim = 2 * hidden_dim
+
+        in_dim = hidden_dim * num_mem_tokens
+        out_dim = hidden_dim * kernel_size * kernel_size
+
+        self.filter_mlp = MLP(
+            input_dim=in_dim,
+            hidden_dim=mlp_hidden_dim,
+            output_dim=out_dim,
+            num_layers=num_layers,
+            BN=use_bn
+        )
+
+    def forward(self, memory_tokens: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            memory_tokens: Tensor of shape (B, K, C),
+                where K == num_mem_tokens and C == hidden_dim.
+
+        Returns:
+            filter_kernel: Tensor of shape (B, C, k, k)
+                The predicted correlation filter for each batch element.
+        """
+        B, K, C = memory_tokens.shape
+        assert C == self.hidden_dim, \
+            f"Channel dim mismatch: got {C}, expected {self.hidden_dim}"
+        if self.num_mem_tokens is not None:
+            assert K == self.num_mem_tokens, \
+                f"Num memory tokens mismatch: got {K}, expected {self.num_mem_tokens}"
+
+        # Flatten tokens: (B, K, C) -> (B, K*C)
+        mem_flat = memory_tokens.reshape(B, K * C)
+
+        # Predict filter weights
+        f_vec = self.filter_mlp(mem_flat)  # (B, C*k*k)
+
+        k = self.kernel_size
+        filter_kernel = f_vec.view(B, C, k, k)  # (B, C, k, k)
+        return filter_kernel
+
+
+def build_memory_filter_head(cfg, hidden_dim):
+    """
+    Helper to build MemoryFilterHead from config.
+
+    Expects:
+        cfg.MODEL.MEMORY.NUM_TOKENS  (int, > 0)
+        Optional:
+            cfg.MODEL.MEMORY.KERNEL_SIZE
+            cfg.MODEL.MEMORY.MLP_HIDDEN_DIM
+            cfg.MODEL.MEMORY.MLP_LAYERS
+            cfg.MODEL.MEMORY.MLP_BN
+    """
+    memory_cfg = getattr(cfg.MODEL, "MEMORY", None)
+    if memory_cfg is None:
+        raise ValueError("cfg.MODEL.MEMORY is required to build MemoryFilterHead.")
+
+    num_mem_tokens = int(getattr(memory_cfg, "NUM_TOKENS", 0))
+    if num_mem_tokens <= 0:
+        raise ValueError("MODEL.MEMORY.NUM_TOKENS must be > 0 to build MemoryFilterHead.")
+
+    kernel_size = int(getattr(memory_cfg, "KERNEL_SIZE", 3))
+    mlp_hidden_dim = int(getattr(memory_cfg, "MLP_HIDDEN_DIM", 2 * hidden_dim))
+    num_layers = int(getattr(memory_cfg, "MLP_LAYERS", 3))
+    use_bn = bool(getattr(memory_cfg, "MLP_BN", False))
+
+    return MemoryFilterHead(
+        hidden_dim=hidden_dim,
+        num_mem_tokens=num_mem_tokens,
+        kernel_size=kernel_size,
+        mlp_hidden_dim=mlp_hidden_dim,
+        num_layers=num_layers,
+        use_bn=use_bn
+    )

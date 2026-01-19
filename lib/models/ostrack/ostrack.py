@@ -8,8 +8,9 @@ from typing import List
 import torch
 from torch import nn
 from torch.nn.modules.transformer import _get_clones
+import torch.nn.functional as F
 
-from lib.models.layers.head import build_box_head
+from lib.models.layers.head import build_box_head, build_memory_filter_head
 from lib.models.ostrack.vit import vit_base_patch16_224
 from lib.models.ostrack.vit_ce import vit_large_patch16_224_ce, vit_base_patch16_224_ce
 from lib.utils.box_ops import box_xyxy_to_cxcywh
@@ -18,7 +19,7 @@ from lib.utils.box_ops import box_xyxy_to_cxcywh
 class OSTrack(nn.Module):
     """ This is the base class for OSTrack """
 
-    def __init__(self, transformer, box_head, aux_loss=False, head_type="CORNER"):
+    def __init__(self, transformer, box_head, mem_filter_head=None, aux_loss=False, head_type="CORNER"):
         """ Initializes the model.
         Parameters:
             transformer: torch module of the transformer architecture.
@@ -27,6 +28,7 @@ class OSTrack(nn.Module):
         super().__init__()
         self.backbone = transformer
         self.box_head = box_head
+        self.mem_filter_head = mem_filter_head
 
         self.aux_loss = aux_loss
         self.head_type = head_type
@@ -54,15 +56,40 @@ class OSTrack(nn.Module):
         feat_last = x
         if isinstance(x, list):
             feat_last = x[-1]
-        out = self.forward_head(feat_last, None)
+
+        # Extract memory tokens from aux_dict for heads
+        memory_tokens = aux_dict.get('memory_tokens', None)
+        out = self.forward_head(feat_last, None, memory_tokens=memory_tokens)
+
+        # ------------------------------------------------------------------
+        # Memory filter head: predict DiMP-style filter from memory tokens.
+        # No convolution here; trainer will use mem_filter_kernel + features.
+        # ------------------------------------------------------------------
+        if (hasattr(self, 'mem_filter_head')
+                and self.mem_filter_head is not None
+                and memory_tokens is not None):
+            # memory_tokens: (B, K, C)
+            filter_kernel = self.mem_filter_head(memory_tokens)  # (B, C, k, k)
+            out['mem_filter_kernel'] = filter_kernel
+
+            # Extract search features (B, C, H, W) from concatenated template+search sequence
+            # feat_last: (B, L_z + L_x, C); take last feat_len_s tokens as search
+            enc_opt_mem = feat_last[:, -self.feat_len_s:]  # (B, HW, C)
+            opt_mem = (enc_opt_mem.unsqueeze(-1)).permute((0, 3, 2, 1)).contiguous()  # (B, 1, C, HW)
+            bs_mem, Nq_mem, C_feat, HW_feat = opt_mem.size()
+            search_feat = opt_mem.view(-1, C_feat, self.feat_sz_s, self.feat_sz_s)  # (B, C, H, W)
+
+            out['search_feat'] = search_feat
 
         out.update(aux_dict)
         out['backbone_feat'] = x
         return out
 
-    def forward_head(self, cat_feature, gt_score_map=None):
+    def forward_head(self, cat_feature, gt_score_map=None, memory_tokens=None):
         """
         cat_feature: output embeddings of the backbone, it can be (HW1+HW2, B, C) or (HW2, B, C)
+        memory_tokens: memory tokens from backbone (B, num_mem_tokens, C) or None
+                       (not used directly in the main prediction head here).
         """
         enc_opt = cat_feature[:, -self.feat_len_s:]  # encoder output for the search region (B, HW, C)
         opt = (enc_opt.unsqueeze(-1)).permute((0, 3, 2, 1)).contiguous()
@@ -131,9 +158,19 @@ def build_ostrack(cfg, training=True):
 
     box_head = build_box_head(cfg, hidden_dim)
 
+    # Build memory filter head if memory is enabled in config
+    mem_filter_head = None
+    memory_cfg = getattr(cfg.MODEL, "MEMORY", None)
+    if memory_cfg is not None:
+        mem_enabled = getattr(memory_cfg, "ENABLED", False)
+        mem_k = int(getattr(memory_cfg, "NUM_TOKENS", 0))
+        if mem_enabled and mem_k > 0:
+            mem_filter_head = build_memory_filter_head(cfg, hidden_dim)
+
     model = OSTrack(
         backbone,
         box_head,
+        mem_filter_head=mem_filter_head,
         aux_loss=False,
         head_type=cfg.MODEL.HEAD.TYPE,
     )

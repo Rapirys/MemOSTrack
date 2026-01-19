@@ -2,6 +2,7 @@ from . import BaseActor
 from lib.utils.misc import NestedTensor
 from lib.utils.box_ops import box_cxcywh_to_xyxy, box_xywh_to_xyxy
 import torch
+import torch.nn.functional as F
 from lib.utils.merge import merge_template_search
 from ...utils.heapmap_utils import generate_heatmap
 from ...utils.ce_utils import generate_mask_cond, adjust_keep_rate
@@ -83,7 +84,7 @@ class OSTrackActor(BaseActor):
         # gt gaussian map
         gt_bbox = gt_dict['search_anno'][-1]  # (Ns, batch, 4) (x1,y1,w,h) -> (batch, 4)
         gt_gaussian_maps = generate_heatmap(gt_dict['search_anno'], self.cfg.DATA.SEARCH.SIZE, self.cfg.MODEL.BACKBONE.STRIDE)
-        gt_gaussian_maps = gt_gaussian_maps[-1].unsqueeze(1)
+        gt_gaussian_maps = gt_gaussian_maps[-1].unsqueeze(1)  # (B, 1, Hf, Wf)
 
         # Get boxes
         pred_boxes = pred_dict['pred_boxes']
@@ -100,13 +101,62 @@ class OSTrackActor(BaseActor):
             giou_loss, iou = torch.tensor(0.0).cuda(), torch.tensor(0.0).cuda()
         # compute l1 loss
         l1_loss = self.objective['l1'](pred_boxes_vec, gt_boxes_vec)  # (BN,4) (BN,4)
-        # compute location loss
+        # compute location loss for main head
         if 'score_map' in pred_dict:
             location_loss = self.objective['focal'](pred_dict['score_map'], gt_gaussian_maps)
         else:
             location_loss = torch.tensor(0.0, device=l1_loss.device)
+
+        # ------------------------------------------------------------------
+        # Memory filter loss (DiMP-style) if memory head is active:
+        # L_mem(f) = mean_{(x,c)} ||x * f - c||^2 + λ ||f||^2
+        # Here S_train is the set of search-feature / target pairs in this batch.
+        # Currently, training uses one search frame per sample, so this is
+        # averaged over the batch and spatial locations.
+        # ------------------------------------------------------------------
+        if 'mem_filter_kernel' in pred_dict and 'search_feat' in pred_dict:
+            mem_filter = pred_dict['mem_filter_kernel']  # (B, C, k, k)
+            search_feat = pred_dict['search_feat']  # (B, C, H, W)
+
+            Bf, Cf, Hf, Wf = search_feat.shape
+            k = mem_filter.shape[-1]
+
+            # Grouped conv: x * f for each sample in the batch
+            x_merged = search_feat.view(1, Bf * Cf, Hf, Wf)  # (1, B*C, H, W)
+            w_merged = mem_filter  # (B, C, k, k)
+            mem_response = F.conv2d(x_merged, w_merged, groups=Bf, padding=k // 2)  # (1, B, H, W)
+            mem_response = mem_response.view(Bf, 1, Hf, Wf)  # (B, 1, H, W)
+
+            # ensure spatial sizes match (in case of minor mismatch)
+            if mem_response.shape[-2:] != gt_gaussian_maps.shape[-2:]:
+                gt_mem = F.interpolate(
+                    gt_gaussian_maps,
+                    size=mem_response.shape[-2:],
+                    mode='bilinear',
+                    align_corners=False
+                )
+            else:
+                gt_mem = gt_gaussian_maps
+
+            # data term: mean squared residual over batch and spatial dims
+            data_mem_loss = torch.mean((mem_response - gt_mem) ** 2)
+
+            # regularization term on filter kernel
+            memory_cfg = getattr(self.cfg.MODEL, "MEMORY", None)
+            lambda_reg = getattr(memory_cfg, "FILTER_REG", 1e-4) if memory_cfg is not None else 1e-4
+            reg_mem_loss = lambda_reg * torch.mean(mem_filter ** 2)
+
+            mem_loss = data_mem_loss + reg_mem_loss
+        else:
+            mem_loss = torch.tensor(0.0, device=l1_loss.device)
+
         # weighted sum
-        loss = self.loss_weight['giou'] * giou_loss + self.loss_weight['l1'] * l1_loss + self.loss_weight['focal'] * location_loss
+        memory_weight = self.loss_weight.get('memory', 0.0)
+        loss = (self.loss_weight['giou'] * giou_loss
+                + self.loss_weight['l1'] * l1_loss
+                + self.loss_weight['focal'] * location_loss
+                + memory_weight * mem_loss)
+
         if return_status:
             # status for log
             mean_iou = iou.detach().mean()
@@ -114,6 +164,7 @@ class OSTrackActor(BaseActor):
                       "Loss/giou": giou_loss.item(),
                       "Loss/l1": l1_loss.item(),
                       "Loss/location": location_loss.item(),
+                      "Loss/memory": mem_loss.item(),
                       "IoU": mean_iou.item()}
             return loss, status
         else:
