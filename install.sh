@@ -1,5 +1,5 @@
 echo "****************** Installing pytorch ******************"
-conda install pytorch==1.9.0 torchvision==0.10.0 torchaudio==0.9.0 cudatoolkit=10.2 -c pytorch
+conda install -y pytorch==1.12.1 torchvision==0.13.1 torchaudio==0.12.1 cudatoolkit=11.3 -c pytorch
 
 echo ""
 echo ""
@@ -97,7 +97,7 @@ pip install wandb
 echo ""
 echo ""
 echo "****************** Installing timm ******************"
-pip install timm
+pip install timm==0.6.13
 
 echo ""
 echo ""
