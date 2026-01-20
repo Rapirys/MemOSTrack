@@ -151,7 +151,7 @@ class OSTrackActor(BaseActor):
             mem_loss = torch.tensor(0.0, device=l1_loss.device)
 
         # weighted sum
-        memory_weight = self.loss_weight.get('memory', 0.0)
+        memory_weight = self.loss_weight.get('memory', 0.001)
         loss = (self.loss_weight['giou'] * giou_loss
                 + self.loss_weight['l1'] * l1_loss
                 + self.loss_weight['focal'] * location_loss
@@ -165,6 +165,7 @@ class OSTrackActor(BaseActor):
                       "Loss/l1": l1_loss.item(),
                       "Loss/location": location_loss.item(),
                       "Loss/memory": mem_loss.item(),
+                      "Loss/memory weighted": memory_weight * mem_loss,
                       "IoU": mean_iou.item()}
             return loss, status
         else:
