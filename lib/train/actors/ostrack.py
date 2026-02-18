@@ -90,6 +90,47 @@ class OSTrackActor(BaseActor):
 
         return out_dict
 
+    def compute_memory_filter_loss(self, pred_t, gt_gaussian_maps, device):
+        # Memory filter loss (DiMP-style) for this frame
+        if 'mem_filter_kernel' in pred_t and 'search_feat' in pred_t:
+            mem_filter = pred_t['mem_filter_kernel']  # (B, C, k, k)
+            search_feat = pred_t['search_feat']  # (B, C, H, W)
+
+            Bf, Cf, Hf, Wf = search_feat.shape
+            k = mem_filter.shape[-1]
+
+            # Grouped conv: x * f for each sample in the batch
+            x_merged = search_feat.view(1, Bf * Cf, Hf, Wf)  # (1, B*C, H, W)
+            w_merged = mem_filter  # (B, C, k, k)
+            mem_response = F.conv2d(x_merged, w_merged, groups=Bf, padding=k // 2)  # (1, B, H, W)
+            mem_response = mem_response.view(Bf, 1, Hf, Wf)  # (B, 1, H, W)
+
+            # ensure spatial sizes match (in case of minor mismatch)
+            if mem_response.shape[-2:] != gt_gaussian_maps.shape[-2:]:
+                gt_mem = F.interpolate(
+                    gt_gaussian_maps,
+                    size=mem_response.shape[-2:],
+                    mode='bilinear',
+                    align_corners=False
+                )
+                print("warning, innvestigate gt_mem spatial size")
+            else:
+                gt_mem = gt_gaussian_maps
+
+            # data term: mean squared residual over batch and spatial dims
+            data_mem_loss = torch.mean((mem_response - gt_mem) ** 2)
+
+            # regularization term on filter kernel
+            memory_cfg = getattr(self.cfg.MODEL, "MEMORY", None)
+            lambda_reg = getattr(memory_cfg, "FILTER_REG", 1e-4) if memory_cfg is not None else 1e-4
+            reg_mem_loss = lambda_reg * torch.mean(mem_filter ** 2)
+
+            mem_loss_t = data_mem_loss + reg_mem_loss #∥x∗f−c∥+λ∥f∥
+        else:
+            mem_loss_t = torch.tensor(0.0, device=device)
+
+        return mem_loss_t
+
     def compute_losses(self, pred_dict, gt_dict, return_status=True):
         search_anno = gt_dict['search_anno']  # (Ns, B, 4)
         gt_gaussian_maps_all = generate_heatmap(search_anno, self.cfg.DATA.SEARCH.SIZE, self.cfg.MODEL.BACKBONE.STRIDE)
@@ -133,43 +174,7 @@ class OSTrackActor(BaseActor):
             else:
                 location_loss_t = torch.tensor(0.0, device=device)
 
-            # Memory filter loss (DiMP-style) for this frame
-            if 'mem_filter_kernel' in pred_t and 'search_feat' in pred_t:
-                mem_filter = pred_t['mem_filter_kernel']  # (B, C, k, k)
-                search_feat = pred_t['search_feat']  # (B, C, H, W)
-
-                Bf, Cf, Hf, Wf = search_feat.shape
-                k = mem_filter.shape[-1]
-
-                # Grouped conv: x * f for each sample in the batch
-                x_merged = search_feat.view(1, Bf * Cf, Hf, Wf)  # (1, B*C, H, W)
-                w_merged = mem_filter  # (B, C, k, k)
-                mem_response = F.conv2d(x_merged, w_merged, groups=Bf, padding=k // 2)  # (1, B, H, W)
-                mem_response = mem_response.view(Bf, 1, Hf, Wf)  # (B, 1, H, W)
-
-                # ensure spatial sizes match (in case of minor mismatch)
-                if mem_response.shape[-2:] != gt_gaussian_maps.shape[-2:]:
-                    gt_mem = F.interpolate(
-                        gt_gaussian_maps,
-                        size=mem_response.shape[-2:],
-                        mode='bilinear',
-                        align_corners=False
-                    )
-                    print("warning, innvestigate gt_mem spatial size")
-                else:
-                    gt_mem = gt_gaussian_maps
-
-                # data term: mean squared residual over batch and spatial dims
-                data_mem_loss = torch.mean((mem_response - gt_mem) ** 2)
-
-                # regularization term on filter kernel
-                memory_cfg = getattr(self.cfg.MODEL, "MEMORY", None)
-                lambda_reg = getattr(memory_cfg, "FILTER_REG", 1e-4) if memory_cfg is not None else 1e-4
-                reg_mem_loss = lambda_reg * torch.mean(mem_filter ** 2)
-
-                mem_loss_t = data_mem_loss + reg_mem_loss #∥x∗f−c∥+λ∥f∥
-            else:
-                mem_loss_t = torch.tensor(0.0, device=device)
+            mem_loss_t = self.compute_memory_filter_loss(pred_t, gt_gaussian_maps, device)
 
             sum_giou_loss += giou_loss_t
             sum_l1_loss += l1_loss_t
