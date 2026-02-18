@@ -70,11 +70,16 @@ class OSTrackActor(BaseActor):
             template_list = template_list[0]
 
         mem_tokens = None
+        mem_cfg = getattr(self.cfg.MODEL, "MEMORY", None)
+        max_bptt_steps = int(getattr(mem_cfg, "BPTT_STEPS", -1)) if mem_cfg is not None else -1
         if hasattr(self.net, 'backbone') and hasattr(self.net.backbone, 'init_memory') and getattr(self.net.backbone, 'memory_tokens', 0) > 0:
             mem_tokens = self.net.backbone.init_memory(batch_size, device=search_images.device, dtype=search_images.dtype)
 
         out_dict = []
         for i in range(num_search):
+            if max_bptt_steps > 0 and i > 0 and mem_tokens is not None:
+                if i % (max_bptt_steps + 1) == 0:
+                    mem_tokens = mem_tokens.detach()
             search_img = search_images[i].view(-1, *search_img_shape)  # (batch, 3, 320, 320)
             out_i = self.net(template=template_list,
                              search=search_img,

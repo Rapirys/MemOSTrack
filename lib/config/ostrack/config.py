@@ -55,6 +55,7 @@ cfg.TRAIN.AMP = False
 cfg.MODEL.MEMORY = edict()
 cfg.MODEL.MEMORY.ENABLED = False
 cfg.MODEL.MEMORY.NUM_TOKENS = 0
+cfg.MODEL.MEMORY.BPTT_STEPS = -1
 
 cfg.TRAIN.CE_START_EPOCH = 20  # candidate elimination start epoch
 cfg.TRAIN.CE_WARM_EPOCH = 80  # candidate elimination warm up epoch
