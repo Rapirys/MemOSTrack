@@ -39,7 +39,6 @@ class OSTrackActor(BaseActor):
     def forward_pass(self, data):
         # currently only support 1 template and 1 search region
         assert len(data['template_images']) == 1
-        assert len(data['search_images']) == 1
 
         template_list = []
         for i in range(self.settings.num_template):
@@ -48,7 +47,10 @@ class OSTrackActor(BaseActor):
             # template_att_i = data['template_att'][i].view(-1, *data['template_att'].shape[2:])  # (batch, 128, 128)
             template_list.append(template_img_i)
 
-        search_img = data['search_images'][0].view(-1, *data['search_images'].shape[2:])  # (batch, 3, 320, 320)
+        search_images = data['search_images']
+        num_search = search_images.shape[0]
+        batch_size = search_images.shape[1]
+        search_img_shape = search_images.shape[2:]
         # search_att = data['search_att'][0].view(-1, *data['search_att'].shape[2:])  # (batch, 320, 320)
 
         box_mask_z = None
@@ -69,86 +71,117 @@ class OSTrackActor(BaseActor):
 
         mem_tokens = None
         if hasattr(self.net, 'backbone') and hasattr(self.net.backbone, 'init_memory') and getattr(self.net.backbone, 'memory_tokens', 0) > 0:
-            mem_tokens = self.net.backbone.init_memory(search_img.shape[0], device=search_img.device, dtype=search_img.dtype)
+            mem_tokens = self.net.backbone.init_memory(batch_size, device=search_images.device, dtype=search_images.dtype)
 
-        out_dict = self.net(template=template_list,
-                            search=search_img,
-                            ce_template_mask=box_mask_z,
-                            ce_keep_rate=ce_keep_rate,
-                            return_last_attn=False,
-                            mem_tokens=mem_tokens)
+        out_dict = []
+        for i in range(num_search):
+            search_img = search_images[i].view(-1, *search_img_shape)  # (batch, 3, 320, 320)
+            out_i = self.net(template=template_list,
+                             search=search_img,
+                             ce_template_mask=box_mask_z,
+                             ce_keep_rate=ce_keep_rate,
+                             return_last_attn=False,
+                             mem_tokens=mem_tokens)
+            if 'memory_tokens' in out_i:
+                mem_tokens = out_i['memory_tokens']
+            out_dict.append(out_i)
+
+     #   print ("Debug: out_dict =", len(out_dict))
 
         return out_dict
 
     def compute_losses(self, pred_dict, gt_dict, return_status=True):
-        # gt gaussian map
-        gt_bbox = gt_dict['search_anno'][-1]  # (Ns, batch, 4) (x1,y1,w,h) -> (batch, 4)
-        gt_gaussian_maps = generate_heatmap(gt_dict['search_anno'], self.cfg.DATA.SEARCH.SIZE, self.cfg.MODEL.BACKBONE.STRIDE)
-        gt_gaussian_maps = gt_gaussian_maps[-1].unsqueeze(1)  # (B, 1, Hf, Wf)
+        search_anno = gt_dict['search_anno']  # (Ns, B, 4)
+        gt_gaussian_maps_all = generate_heatmap(search_anno, self.cfg.DATA.SEARCH.SIZE, self.cfg.MODEL.BACKBONE.STRIDE)
 
-        # Get boxes
-        pred_boxes = pred_dict['pred_boxes']
-        if torch.isnan(pred_boxes).any():
-            raise ValueError("Network outputs is NAN! Stop Training")
-        num_queries = pred_boxes.size(1)
-        pred_boxes_vec = box_cxcywh_to_xyxy(pred_boxes).view(-1, 4)  # (B,N,4) --> (BN,4) (x1,y1,x2,y2)
-        gt_boxes_vec = box_xywh_to_xyxy(gt_bbox)[:, None, :].repeat((1, num_queries, 1)).view(-1, 4).clamp(min=0.0,
-                                                                                                           max=1.0)  # (B,4) --> (B,1,4) --> (B,N,4)
-        # compute giou and iou
-        try:
-            giou_loss, iou = self.objective['giou'](pred_boxes_vec, gt_boxes_vec)  # (BN,4) (BN,4)
-        except:
-            giou_loss, iou = torch.tensor(0.0).cuda(), torch.tensor(0.0).cuda()
-        # compute l1 loss
-        l1_loss = self.objective['l1'](pred_boxes_vec, gt_boxes_vec)  # (BN,4) (BN,4)
-        # compute location loss for main head
-        if 'score_map' in pred_dict:
-            location_loss = self.objective['focal'](pred_dict['score_map'], gt_gaussian_maps)
-        else:
-            location_loss = torch.tensor(0.0, device=l1_loss.device)
+        num_frames = len(pred_dict)
+        if num_frames == 0:
+            raise ValueError("Empty prediction sequence in compute_losses.")
 
-        # ------------------------------------------------------------------
-        # Memory filter loss (DiMP-style) if memory head is active:
-        # L_mem(f) = mean_{(x,c)} ||x * f - c||^2 + λ ||f||^2
-        # Here S_train is the set of search-feature / target pairs in this batch.
-        # Currently, training uses one search frame per sample, so this is
-        # averaged over the batch and spatial locations.
-        # ------------------------------------------------------------------
-        if 'mem_filter_kernel' in pred_dict and 'search_feat' in pred_dict:
-            mem_filter = pred_dict['mem_filter_kernel']  # (B, C, k, k)
-            search_feat = pred_dict['search_feat']  # (B, C, H, W)
+        device = pred_dict[0]['pred_boxes'].device
+        sum_giou_loss = torch.tensor(0.0, device=device)
+        sum_l1_loss = torch.tensor(0.0, device=device)
+        sum_location_loss = torch.tensor(0.0, device=device)
+        sum_mem_loss = torch.tensor(0.0, device=device)
+        sum_iou = 0.0
+        # TODO: maybe add check that num_frames matches GT length
+        for t in range(num_frames):
+            # gt for frame t
+            gt_bbox = search_anno[t]  # (batch, 4)
+            gt_gaussian_maps = gt_gaussian_maps_all[t].unsqueeze(1)  # (B, 1, Hf, Wf)
 
-            Bf, Cf, Hf, Wf = search_feat.shape
-            k = mem_filter.shape[-1]
+            # predictions for frame t
+            pred_t = pred_dict[t]
+            pred_boxes = pred_t['pred_boxes']
+            if torch.isnan(pred_boxes).any():
+                raise ValueError("Network outputs is NAN! Stop Training")
+            num_queries = pred_boxes.size(1)
+            pred_boxes_vec = box_cxcywh_to_xyxy(pred_boxes).view(-1, 4)  # (B,N,4) --> (BN,4) (x1,y1,x2,y2)
+            gt_boxes_vec = box_xywh_to_xyxy(gt_bbox)[:, None, :].repeat((1, num_queries, 1)).view(-1, 4).clamp(min=0.0,
+                                                                                                               max=1.0)  # (B,4) --> (B,1,4) --> (B,N,4)
 
-            # Grouped conv: x * f for each sample in the batch
-            x_merged = search_feat.view(1, Bf * Cf, Hf, Wf)  # (1, B*C, H, W)
-            w_merged = mem_filter  # (B, C, k, k)
-            mem_response = F.conv2d(x_merged, w_merged, groups=Bf, padding=k // 2)  # (1, B, H, W)
-            mem_response = mem_response.view(Bf, 1, Hf, Wf)  # (B, 1, H, W)
-
-            # ensure spatial sizes match (in case of minor mismatch)
-            if mem_response.shape[-2:] != gt_gaussian_maps.shape[-2:]:
-                gt_mem = F.interpolate(
-                    gt_gaussian_maps,
-                    size=mem_response.shape[-2:],
-                    mode='bilinear',
-                    align_corners=False
-                )
+            # compute giou and iou
+            try:
+                giou_loss_t, iou_t = self.objective['giou'](pred_boxes_vec, gt_boxes_vec)  # (BN,4) (BN,4)
+            except:
+                giou_loss_t, iou_t = torch.tensor(0.0, device=device), torch.tensor(0.0, device=device)
+            # compute l1 loss
+            l1_loss_t = self.objective['l1'](pred_boxes_vec, gt_boxes_vec)  # (BN,4) (BN,4)
+            # compute location loss for main head
+            if 'score_map' in pred_t:
+                location_loss_t = self.objective['focal'](pred_t['score_map'], gt_gaussian_maps)
             else:
-                gt_mem = gt_gaussian_maps
+                location_loss_t = torch.tensor(0.0, device=device)
 
-            # data term: mean squared residual over batch and spatial dims
-            data_mem_loss = torch.mean((mem_response - gt_mem) ** 2)
+            # Memory filter loss (DiMP-style) for this frame
+            if 'mem_filter_kernel' in pred_t and 'search_feat' in pred_t:
+                mem_filter = pred_t['mem_filter_kernel']  # (B, C, k, k)
+                search_feat = pred_t['search_feat']  # (B, C, H, W)
 
-            # regularization term on filter kernel
-            memory_cfg = getattr(self.cfg.MODEL, "MEMORY", None)
-            lambda_reg = getattr(memory_cfg, "FILTER_REG", 1e-4) if memory_cfg is not None else 1e-4
-            reg_mem_loss = lambda_reg * torch.mean(mem_filter ** 2)
+                Bf, Cf, Hf, Wf = search_feat.shape
+                k = mem_filter.shape[-1]
 
-            mem_loss = data_mem_loss + reg_mem_loss
-        else:
-            mem_loss = torch.tensor(0.0, device=l1_loss.device)
+                # Grouped conv: x * f for each sample in the batch
+                x_merged = search_feat.view(1, Bf * Cf, Hf, Wf)  # (1, B*C, H, W)
+                w_merged = mem_filter  # (B, C, k, k)
+                mem_response = F.conv2d(x_merged, w_merged, groups=Bf, padding=k // 2)  # (1, B, H, W)
+                mem_response = mem_response.view(Bf, 1, Hf, Wf)  # (B, 1, H, W)
+
+                # ensure spatial sizes match (in case of minor mismatch)
+                if mem_response.shape[-2:] != gt_gaussian_maps.shape[-2:]:
+                    gt_mem = F.interpolate(
+                        gt_gaussian_maps,
+                        size=mem_response.shape[-2:],
+                        mode='bilinear',
+                        align_corners=False
+                    )
+                    print("warning, innvestigate gt_mem spatial size")
+                else:
+                    gt_mem = gt_gaussian_maps
+
+                # data term: mean squared residual over batch and spatial dims
+                data_mem_loss = torch.mean((mem_response - gt_mem) ** 2)
+
+                # regularization term on filter kernel
+                memory_cfg = getattr(self.cfg.MODEL, "MEMORY", None)
+                lambda_reg = getattr(memory_cfg, "FILTER_REG", 1e-4) if memory_cfg is not None else 1e-4
+                reg_mem_loss = lambda_reg * torch.mean(mem_filter ** 2)
+
+                mem_loss_t = data_mem_loss + reg_mem_loss #∥x∗f−c∥+λ∥f∥
+            else:
+                mem_loss_t = torch.tensor(0.0, device=device)
+
+            sum_giou_loss += giou_loss_t
+            sum_l1_loss += l1_loss_t
+            sum_location_loss += location_loss_t
+            sum_mem_loss += mem_loss_t
+            sum_iou += iou_t.detach().mean().item()
+
+        giou_loss = sum_giou_loss / num_frames
+        l1_loss = sum_l1_loss / num_frames
+        location_loss = sum_location_loss / num_frames
+        mem_loss = sum_mem_loss / num_frames
+        mean_iou = torch.tensor(sum_iou / num_frames, device=device)
 
         # weighted sum
         memory_weight = self.loss_weight.get('memory', 0.001)
@@ -159,13 +192,12 @@ class OSTrackActor(BaseActor):
 
         if return_status:
             # status for log
-            mean_iou = iou.detach().mean()
             status = {"Loss/total": loss.item(),
                       "Loss/giou": giou_loss.item(),
                       "Loss/l1": l1_loss.item(),
                       "Loss/location": location_loss.item(),
                       "Loss/memory": mem_loss.item(),
-                      "Loss/memory weighted": memory_weight * mem_loss,
+                      "Loss/memory weighted": (memory_weight * mem_loss).item(),
                       "IoU": mean_iou.item()}
             return loss, status
         else:

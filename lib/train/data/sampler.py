@@ -135,6 +135,20 @@ class TrackingSampler(torch.utils.data.Dataset):
                         # Increase gap until a frame is found
                         gap_increase += 5
 
+                elif self.frame_sample_mode == "causal_consecutive":
+                    seq_len = len(visible)
+                    total_required = self.num_template_frames + self.num_search_frames
+                    if total_required > seq_len:
+                        raise ValueError(f"Requested {total_required} frames (template + search), but sequence length "
+                                         f"is {seq_len}. Reduce cfg.DATA.TEMPLATE.NUMBER and/or cfg.DATA.SEARCH.NUMBER.")
+                    max_start = seq_len - total_required
+                    start_id = random.randint(0, max_start)
+                    #TODO: This is “consecutive indices” in [0..len(visible)-1], not necessarily consecutive actual video frames.
+                    # check that frames are consecutive
+                    template_frame_ids = list(range(start_id, start_id + self.num_template_frames))
+                    search_frame_ids = list(range(start_id + self.num_template_frames,
+                                                  start_id + total_required))
+
                 elif self.frame_sample_mode == "trident" or self.frame_sample_mode == "trident_pro":
                     template_frame_ids, search_frame_ids = self.get_frame_ids_trident(visible)
                 elif self.frame_sample_mode == "stark":
