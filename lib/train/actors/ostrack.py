@@ -95,46 +95,87 @@ class OSTrackActor(BaseActor):
 
         return out_dict
 
-    def compute_memory_filter_loss(self, pred_t, gt_gaussian_maps, device):
-        # Memory filter loss (DiMP-style) for this frame
-        if 'mem_filter_kernel' in pred_t and 'search_feat' in pred_t:
-            mem_filter = pred_t['mem_filter_kernel']  # (B, C, k, k)
-            search_feat = pred_t['search_feat']  # (B, C, H, W)
+    def compute_memory_filter_loss(self, pred_seq, gt_gaussian_maps_all, device):
+        memory_cfg = getattr(self.cfg.MODEL, "MEMORY", None)
+        num_frames = int(getattr(memory_cfg, "FILTER_LOSS_FRAMES", 1)) if memory_cfg is not None else 1
+        if num_frames <= 0 or len(pred_seq) == 0:
+            return torch.tensor(0.0, device=device)
 
-            Bf, Cf, Hf, Wf = search_feat.shape
+        filter_frames = [
+            i for i, pred_t in enumerate(pred_seq)
+            if 'mem_filter_kernel' in pred_t and 'search_feat' in pred_t
+        ]
+        if not filter_frames:
+            return torch.tensor(0.0, device=device)
+
+        feature_frames = [
+            i for i, pred_t in enumerate(pred_seq)
+            if 'search_feat' in pred_t
+        ]
+        if not feature_frames:
+            return torch.tensor(0.0, device=device)
+
+        data_mem_loss = torch.tensor(0.0, device=device)
+        reg_mem_loss = torch.tensor(0.0, device=device)
+        num_filters = 0
+
+        for t in filter_frames:
+            pred_t = pred_seq[t]
+            mem_filter = pred_t['mem_filter_kernel']  # (B, C, k, k)
             k = mem_filter.shape[-1]
 
-            # Grouped conv: x * f for each sample in the batch
-            x_merged = search_feat.view(1, Bf * Cf, Hf, Wf)  # (1, B*C, H, W)
+            candidates = feature_frames
+            if len(feature_frames) > 1 and t in feature_frames:
+                candidates = [i for i in feature_frames if i != t]
+            if not candidates:
+                continue
+
+            sample_count = min(num_frames, len(candidates))
+            sample_idx = torch.randperm(len(candidates), device=device)[:sample_count].tolist()
+            chosen = [candidates[i] for i in sample_idx]
+
+            search_feats = []
+            gt_maps = []
+            for s in chosen:
+                search_feats.append(pred_seq[s]['search_feat'])
+                gt_maps.append(gt_gaussian_maps_all[s].unsqueeze(1))
+
+            # Stack features as batch for grouped conv; keep filter shape (B, C, k, k)
+            search_feat = torch.stack(search_feats, dim=0)  # (F, B, C, H, W)
+            gt_gaussian_maps = torch.stack(gt_maps, dim=0)  # (F, B, 1, H, W)
+
+            Ff, Bf, Cf, Hf, Wf = search_feat.shape
+            x_merged = search_feat.reshape(Ff, Bf * Cf, Hf, Wf)  # (F, B*C, H, W)
             w_merged = mem_filter  # (B, C, k, k)
-            mem_response = F.conv2d(x_merged, w_merged, groups=Bf, padding=k // 2)  # (1, B, H, W)
-            mem_response = mem_response.view(Bf, 1, Hf, Wf)  # (B, 1, H, W)
+            mem_response = F.conv2d(x_merged, w_merged, groups=Bf, padding=k // 2)  # (F, B, H, W)
+            mem_response = mem_response.view(Ff, Bf, 1, Hf, Wf)
 
             # ensure spatial sizes match (in case of minor mismatch)
             if mem_response.shape[-2:] != gt_gaussian_maps.shape[-2:]:
                 gt_mem = F.interpolate(
-                    gt_gaussian_maps,
+                    gt_gaussian_maps.view(Ff * Bf, 1, *gt_gaussian_maps.shape[-2:]),
                     size=mem_response.shape[-2:],
                     mode='bilinear',
                     align_corners=False
-                )
+                ).view(Ff, Bf, 1, Hf, Wf)
                 print("warning, innvestigate gt_mem spatial size")
             else:
                 gt_mem = gt_gaussian_maps
 
-            # data term: mean squared residual over batch and spatial dims
-            data_mem_loss = torch.mean((mem_response - gt_mem) ** 2)
+            data_mem_loss = data_mem_loss + torch.mean((mem_response - gt_mem) ** 2)
+            reg_mem_loss = reg_mem_loss + torch.mean(mem_filter ** 2)
+            num_filters += 1
 
-            # regularization term on filter kernel
-            memory_cfg = getattr(self.cfg.MODEL, "MEMORY", None)
-            lambda_reg = getattr(memory_cfg, "FILTER_REG", 1e-4) if memory_cfg is not None else 1e-4
-            reg_mem_loss = lambda_reg * torch.mean(mem_filter ** 2)
+        if num_filters == 0:
+            return torch.tensor(0.0, device=device)
 
-            mem_loss_t = data_mem_loss + reg_mem_loss #∥x∗f−c∥+λ∥f∥
-        else:
-            mem_loss_t = torch.tensor(0.0, device=device)
+        data_mem_loss = data_mem_loss / num_filters
+        reg_mem_loss = reg_mem_loss / num_filters
 
-        return mem_loss_t
+        # regularization term on filter kernel
+        lambda_reg = getattr(memory_cfg, "FILTER_REG", 1e-4) if memory_cfg is not None else 1e-4
+
+        return data_mem_loss + lambda_reg * reg_mem_loss  # ∥x∗f−c∥+λ∥f∥
 
     def compute_losses(self, pred_dict, gt_dict, return_status=True):
         search_anno = gt_dict['search_anno']  # (Ns, B, 4)
@@ -148,7 +189,6 @@ class OSTrackActor(BaseActor):
         sum_giou_loss = torch.tensor(0.0, device=device)
         sum_l1_loss = torch.tensor(0.0, device=device)
         sum_location_loss = torch.tensor(0.0, device=device)
-        sum_mem_loss = torch.tensor(0.0, device=device)
         sum_iou = 0.0
         # TODO: maybe add check that num_frames matches GT length
         for t in range(num_frames):
@@ -179,18 +219,15 @@ class OSTrackActor(BaseActor):
             else:
                 location_loss_t = torch.tensor(0.0, device=device)
 
-            mem_loss_t = self.compute_memory_filter_loss(pred_t, gt_gaussian_maps, device)
-
             sum_giou_loss += giou_loss_t
             sum_l1_loss += l1_loss_t
             sum_location_loss += location_loss_t
-            sum_mem_loss += mem_loss_t
             sum_iou += iou_t.detach().mean().item()
 
         giou_loss = sum_giou_loss / num_frames
         l1_loss = sum_l1_loss / num_frames
         location_loss = sum_location_loss / num_frames
-        mem_loss = sum_mem_loss / num_frames
+        mem_loss = self.compute_memory_filter_loss(pred_dict, gt_gaussian_maps_all, device)
         mean_iou = torch.tensor(sum_iou / num_frames, device=device)
 
         # weighted sum
