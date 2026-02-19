@@ -229,10 +229,12 @@ class OSTrackActor(BaseActor):
         l1_loss = sum_l1_loss / num_frames
         location_loss = sum_location_loss / num_frames
         memory_weight = self.loss_weight.get('memory', 0.000)
-        if memory_weight > 0:
-            mem_loss = self.compute_memory_filter_loss(pred_dict, gt_gaussian_maps_all, device)
-        else:
-            mem_loss = torch.tensor(0.0, device=device)
+        # if memory_weight > 0:
+        #     mem_loss = self.compute_memory_filter_loss(pred_dict, gt_gaussian_maps_all, device)
+        # else:
+        #     mem_loss = torch.tensor(0.0, device=device)
+        # TODO: uncomment for real runs.
+        mem_loss = torch.tensor(0.0, device=device)
         mean_iou = torch.tensor(sum_iou / num_frames, device=device)
 
         # weighted sum
