@@ -137,7 +137,8 @@ class OSTrackActor(BaseActor):
             search_feats = []
             gt_maps = []
             for s in chosen:
-                search_feats.append(pred_seq[s]['search_feat'])
+                search_feat = pred_seq[s]['search_feat'].detach()
+                search_feats.append(search_feat)
                 gt_maps.append(gt_gaussian_maps_all[s].unsqueeze(1))
 
             # Stack features as batch for grouped conv; keep filter shape (B, C, k, k)
