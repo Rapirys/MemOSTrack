@@ -1,4 +1,5 @@
 DATA:
+  SAMPLER_MODE: causal_consecutive
   MAX_SAMPLE_INTERVAL: 200
   MEAN:
   - 0.485
@@ -9,7 +10,7 @@ DATA:
     FACTOR: 4.0
     SCALE_JITTER: 0.25
     SIZE: 256
-    NUMBER: 1
+    NUMBER: 2
   STD:
   - 0.229
   - 0.224
@@ -21,23 +22,16 @@ DATA:
     SIZE: 128
   TRAIN:
     DATASETS_NAME:
-      - LASOT
+      - GOT10K_train_full
     DATASETS_RATIO:
       - 1
-    SAMPLE_PER_EPOCH: 60000
+    SAMPLE_PER_EPOCH: 5000
   VAL:
     DATASETS_NAME:
-      - LASOT
+      - GOT10K_official_val
     DATASETS_RATIO:
       - 1
-    SAMPLE_PER_EPOCH: 10000
-
-  #  TRAIN:
-  #    DATASETS_NAME:
-  #      - GOT10K_train_full
-  #    DATASETS_RATIO:
-  #      - 1
-  #    SAMPLE_PER_EPOCH: 60000
+    SAMPLE_PER_EPOCH: 1000
 MODEL:
   PRETRAIN_FILE: "mae_pretrain_vit_base.pth"
   EXTRA_MERGER: False
@@ -51,11 +45,13 @@ MODEL:
   MEMORY:
     ENABLED: True
     NUM_TOKENS: 8
+    BPTT_STEPS: 1
+    FILTER_LOSS_FRAMES: 1
 TRAIN:
   BACKBONE_MULTIPLIER: 0.1
   DROP_PATH_RATE: 0.1
-  BATCH_SIZE: 4
-  EPOCH: 300
+  BATCH_SIZE: 1
+  EPOCH: 30
   GIOU_WEIGHT: 2.0
   L1_WEIGHT: 5.0
   GRAD_CLIP_NORM: 0.1
@@ -67,11 +63,11 @@ TRAIN:
   SCHEDULER:
     TYPE: step
     DECAY_RATE: 0.1
-  VAL_EPOCH_INTERVAL: 20
+  VAL_EPOCH_INTERVAL: 1
   WEIGHT_DECAY: 0.0001
-  AMP: True
+  AMP: False
 TEST:
-  EPOCH: 300
+  EPOCH: 50
   SEARCH_FACTOR: 4.0
   SEARCH_SIZE: 256
   TEMPLATE_FACTOR: 2.0
