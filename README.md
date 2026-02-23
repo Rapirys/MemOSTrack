@@ -181,3 +181,4 @@ If our work is useful for your research, please consider citing:
   year={2022}
 }
 ```
+python tracking/train.py --script ostrack --config vitb_256_mae_32x4_ep300 --save_dir ./output --mode single --nproc_per_node 1 --use_wandb 0 
