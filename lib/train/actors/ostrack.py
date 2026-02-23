@@ -3,6 +3,8 @@ from lib.utils.misc import NestedTensor
 from lib.utils.box_ops import box_cxcywh_to_xyxy, box_xywh_to_xyxy
 import torch
 import torch.nn.functional as F
+import os
+import cv2
 from lib.utils.merge import merge_template_search
 from ...utils.heapmap_utils import generate_heatmap
 from ...utils.ce_utils import generate_mask_cond, adjust_keep_rate
@@ -17,6 +19,13 @@ class OSTrackActor(BaseActor):
         self.settings = settings
         self.bs = self.settings.batchsize  # batch size
         self.cfg = cfg
+        # Temporary debug: save incoming search frames in strict sequence order.
+        self.debug_save_seq = False
+        self.debug_seq_idx = 0
+        self.debug_seq_group_idx = 0
+        self.debug_seq_dir = "/home/illia/PycharmProjects/MemOSTrack/output/videos"
+        if self.debug_save_seq:
+            os.makedirs(self.debug_seq_dir, exist_ok=True)
 
     def __call__(self, data):
         """
@@ -53,6 +62,15 @@ class OSTrackActor(BaseActor):
         search_img_shape = search_images.shape[2:]
         # search_att = data['search_att'][0].view(-1, *data['search_att'].shape[2:])  # (batch, 320, 320)
 
+        if self.debug_save_seq:
+            seq_tag = f"seq_{self.debug_seq_group_idx:06d}"
+            self.debug_seq_group_idx += 1
+            for t_idx in range(data['template_images'].shape[0]):
+                tmpl_img = data['template_images'][t_idx][0].detach().cpu().permute(1, 2, 0).clamp(0, 1)
+                tmpl_img = (tmpl_img * 255).byte().numpy()
+                tmpl_path = os.path.join(self.debug_seq_dir, f"{seq_tag}_template_{t_idx:02d}.jpg")
+                cv2.imwrite(tmpl_path, cv2.cvtColor(tmpl_img, cv2.COLOR_RGB2BGR))
+
         box_mask_z = None
         ce_keep_rate = None
         if self.cfg.MODEL.BACKBONE.CE_LOC:
@@ -81,6 +99,12 @@ class OSTrackActor(BaseActor):
                 if i % (max_bptt_steps + 1) == 0:
                     mem_tokens = mem_tokens.detach()
             search_img = search_images[i].view(-1, *search_img_shape)  # (batch, 3, 320, 320)
+            if self.debug_save_seq:
+                dbg_img = search_img[0].detach().cpu().permute(1, 2, 0).clamp(0, 1)
+                dbg_img = (dbg_img * 255).byte().numpy()
+                dbg_path = os.path.join(self.debug_seq_dir, f"{seq_tag}_search_{i:02d}_{self.debug_seq_idx:06d}.jpg")
+                cv2.imwrite(dbg_path, cv2.cvtColor(dbg_img, cv2.COLOR_RGB2BGR))
+                self.debug_seq_idx += 1
             out_i = self.net(template=template_list,
                              search=search_img,
                              ce_template_mask=box_mask_z,
@@ -228,7 +252,7 @@ class OSTrackActor(BaseActor):
         giou_loss = sum_giou_loss / num_frames
         l1_loss = sum_l1_loss / num_frames
         location_loss = sum_location_loss / num_frames
-        memory_weight = self.loss_weight.get('memory', 0.000)
+        memory_weight = self.loss_weight.get('memory', 0.01)
         # if memory_weight > 0:
         #     mem_loss = self.compute_memory_filter_loss(pred_dict, gt_gaussian_maps_all, device)
         # else:

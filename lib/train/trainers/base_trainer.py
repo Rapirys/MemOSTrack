@@ -85,10 +85,20 @@ class BaseTrainer:
                     self.train_epoch()
 
                     if self.lr_scheduler is not None:
+                        # try:
+                        #     lr_before_step = self.lr_scheduler.get_last_lr()
+                        #     print(f"[LRBoundary] epoch={epoch} pre-scheduler lr={lr_before_step}")
+                        # except Exception:
+                        #     pass
                         if self.settings.scheduler_type != 'cosine':
                             self.lr_scheduler.step()
                         else:
                             self.lr_scheduler.step(epoch - 1)
+                        # try:
+                        #     lr_after_step = self.lr_scheduler.get_last_lr()
+                        #     print(f"[LRBoundary] epoch={epoch} post-scheduler lr={lr_after_step}")
+                        # except Exception:
+                        #     pass
                     # only save the last 10 checkpoints
                     save_every_epoch = getattr(self.settings, "save_every_epoch", False)
                     save_epochs = [79, 159, 239]

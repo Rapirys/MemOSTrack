@@ -164,8 +164,12 @@ class BaseBackbone(nn.Module):
             x = torch.cat([mem_tokens, x], dim=1)
 
         if self.training and getattr(self, "_dbg_once", False) is False:
-            print("DBG: after prepend mem:", x.shape, "mem_k=", self.memory_tokens, "mem_shape=",mem_tokens.shape)
-            self._dbg_once = True
+            if mem_tokens is None:
+                print("DBG: after prepend mem:", x.shape, "mem_k=", self.memory_tokens, "mem_shape=None")
+                self._dbg_once = True
+            else:
+                print("DBG: after prepend mem:", x.shape, "mem_k=", self.memory_tokens, "mem_shape=", mem_tokens.shape)
+                self._dbg_once = True
 
         for i, blk in enumerate(self.blocks):
             x = blk(x)

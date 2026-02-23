@@ -66,19 +66,25 @@ class STARKProcessing(BaseProcessing):
         self.mode = mode
         self.settings = settings
 
-    def _get_jittered_box(self, box, mode):
+    def _get_jittered_box(self, box, mode, jitter_params=None):
         """ Jitter the input box
         args:
             box - input bounding box
             mode - string 'template' or 'search' indicating template or search data
+            jitter_params - optional tuple of (scale_noise, center_noise), each tensor shape (2,)
 
         returns:
             torch.Tensor - jittered box
         """
+        if jitter_params is None:
+            scale_noise = torch.randn(2)
+            center_noise = torch.rand(2) - 0.5
+        else:
+            scale_noise, center_noise = jitter_params
 
-        jittered_size = box[2:4] * torch.exp(torch.randn(2) * self.scale_jitter_factor[mode])
+        jittered_size = box[2:4] * torch.exp(scale_noise * self.scale_jitter_factor[mode])
         max_offset = (jittered_size.prod().sqrt() * torch.tensor(self.center_jitter_factor[mode]).float())
-        jittered_center = box[0:2] + 0.5 * box[2:4] + max_offset * (torch.rand(2) - 0.5)
+        jittered_center = box[0:2] + 0.5 * box[2:4] + max_offset * center_noise
 
         return torch.cat((jittered_center - 0.5 * jittered_size, jittered_size), dim=0)
 
@@ -103,7 +109,12 @@ class STARKProcessing(BaseProcessing):
                 "In pair mode, num train/test frames must be 1"
 
             # Add a uniform noise to the center pos
-            jittered_anno = [self._get_jittered_box(a, s) for a in data[s + '_anno']]
+            if self.mode == 'sequence' and len(data[s + '_anno']) > 1:
+                shared_jitter = (torch.randn(2), torch.rand(2) - 0.5)
+                jittered_anno = [self._get_jittered_box(a, s, jitter_params=shared_jitter)
+                                 for a in data[s + '_anno']]
+            else:
+                jittered_anno = [self._get_jittered_box(a, s) for a in data[s + '_anno']]
 
             # 2021.1.9 Check whether data is valid. Avoid too small bounding boxes
             w, h = torch.stack(jittered_anno, dim=0)[:, 2], torch.stack(jittered_anno, dim=0)[:, 3]
@@ -119,8 +130,13 @@ class STARKProcessing(BaseProcessing):
                                                                               data[s + '_anno'], self.search_area_factor[s],
                                                                               self.output_sz[s], masks=data[s + '_masks'])
             # Apply transforms
+            num_frames = len(crops)
+            if num_frames > 1:
+                new_roll = [True] + [False] * (num_frames - 1)
+            else:
+                new_roll = True
             data[s + '_images'], data[s + '_anno'], data[s + '_att'], data[s + '_masks'] = self.transform[s](
-                image=crops, bbox=boxes, att=att_mask, mask=mask_crops, joint=False)
+                image=crops, bbox=boxes, att=att_mask, mask=mask_crops, joint=False, new_roll=new_roll)
 
             # 2021.1.9 Check whether elements in data[s + '_att'] is all 1
             # Note that type of data[s + '_att'] is tuple, type of ele is torch.tensor
