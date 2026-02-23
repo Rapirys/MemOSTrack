@@ -1,6 +1,8 @@
 import os
 import datetime
 from collections import OrderedDict
+import contextlib
+from collections import deque
 
 from lib.train.data.wandb_logger import WandbWriter
 from lib.train.trainers import BaseTrainer
@@ -50,8 +52,39 @@ class LTRTrainer(BaseTrainer):
         self.move_data_to_gpu = getattr(settings, 'move_data_to_gpu', True)
         self.settings = settings
         self.use_amp = use_amp
+        self.debug_integrity_checks = getattr(settings, "debug_integrity_checks", True)
+        self.debug_log_lr_each_step = getattr(settings, "debug_log_lr_each_step", True)
+        self.iou_window_size = int(getattr(settings, "iou_window_size", 50))
+        self.recent_iou = OrderedDict({loader.name: deque(maxlen=self.iou_window_size) for loader in self.loaders})
         if use_amp:
             self.scaler = GradScaler()
+
+    @staticmethod
+    def _parameter_checksum(model):
+        sum_v = 0.0
+        sq_sum_v = 0.0
+        with torch.no_grad():
+            for p in model.parameters():
+                if p is None:
+                    continue
+                p_det = p.detach().float()
+                sum_v += p_det.sum().item()
+                sq_sum_v += (p_det * p_det).sum().item()
+        return sum_v, sq_sum_v
+
+    @staticmethod
+    def _bn_buffer_checksums(model):
+        checks = OrderedDict()
+        with torch.no_grad():
+            for module_name, module in model.named_modules():
+                if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
+                    if module.running_mean is not None:
+                        checks[f"{module_name}.running_mean"] = module.running_mean.detach().float().sum().item()
+                    if module.running_var is not None:
+                        checks[f"{module_name}.running_var"] = module.running_var.detach().float().sum().item()
+                    if hasattr(module, "num_batches_tracked") and module.num_batches_tracked is not None:
+                        checks[f"{module_name}.num_batches_tracked"] = float(module.num_batches_tracked.detach().cpu().item())
+        return checks
 
     def _set_default_settings(self):
         # Dict of all default values
@@ -68,6 +101,14 @@ class LTRTrainer(BaseTrainer):
 
         self.actor.train(loader.training)
         torch.set_grad_enabled(loader.training)
+        print(f"[ModeCheck] epoch={self.epoch} loader={loader.name} loader.training={loader.training} model.training={self.actor.net.training} grad_enabled={torch.is_grad_enabled()}")
+
+        val_param_before = None
+        val_bn_before = None
+        if self.debug_integrity_checks and not loader.training:
+            val_param_before = self._parameter_checksum(self.actor.net)
+            val_bn_before = self._bn_buffer_checksums(self.actor.net)
+            print(f"[ValCheck] epoch={self.epoch} pre-val param_checksum(sum={val_param_before[0]:.6e}, sq_sum={val_param_before[1]:.6e}), bn_buffers={len(val_bn_before)}")
 
         self._init_timing()
 
@@ -82,10 +123,10 @@ class LTRTrainer(BaseTrainer):
             data['epoch'] = self.epoch
             data['settings'] = self.settings
             # forward pass
-            if not self.use_amp:
-                loss, stats = self.actor(data)
-            else:
-                with autocast():
+            inference_ctx = torch.inference_mode if not loader.training else contextlib.nullcontext
+            autocast_ctx = autocast if self.use_amp else contextlib.nullcontext
+            with inference_ctx():
+                with autocast_ctx():
                     loss, stats = self.actor(data)
 
             # backward pass and update weights
@@ -103,6 +144,15 @@ class LTRTrainer(BaseTrainer):
                         torch.nn.utils.clip_grad_norm_(self.actor.net.parameters(), self.settings.grad_clip_norm)
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
+            else:
+                if self.debug_integrity_checks:
+                    # Validation must never update parameters through optimizer/scaler.
+                    pass
+
+            # if loader.training and self.debug_log_lr_each_step and self.lr_scheduler is not None:
+            #     lr_list = self.lr_scheduler.get_last_lr()
+            #     lr_str = ", ".join([f"{lr:.6e}" for lr in lr_list])
+            #     print(f"[LRStep] epoch={self.epoch} loader={loader.name} iter={i} lr=[{lr_str}]")
 
             # update statistics
             batch_size = data['template_images'].shape[loader.stack_dim]
@@ -122,6 +172,18 @@ class LTRTrainer(BaseTrainer):
         print("Avg Data Time: %.5f" % (self.avg_date_time / self.num_frames * batch_size))
         print("Avg GPU Trans Time: %.5f" % (self.avg_gpu_trans_time / self.num_frames * batch_size))
         print("Avg Forward Time: %.5f" % (self.avg_forward_time / self.num_frames * batch_size))
+
+        if self.debug_integrity_checks and not loader.training:
+            val_param_after = self._parameter_checksum(self.actor.net)
+            val_bn_after = self._bn_buffer_checksums(self.actor.net)
+            param_unchanged = (val_param_before == val_param_after)
+            bn_changed = [k for k, v in val_bn_after.items() if k in val_bn_before and val_bn_before[k] != v]
+            print(f"[ValCheck] epoch={self.epoch} post-val param_checksum(sum={val_param_after[0]:.6e}, sq_sum={val_param_after[1]:.6e})")
+            print(f"[ValCheck] epoch={self.epoch} param_unchanged={param_unchanged}")
+            if bn_changed:
+                print(f"[ValCheck][WARNING] BN buffers changed during val: {len(bn_changed)} tensors. Example: {bn_changed[:3]}")
+            else:
+                print(f"[ValCheck] BN buffers unchanged during val.")
 
     def train_epoch(self):
         """Do one epoch for each loader."""
@@ -162,6 +224,10 @@ class LTRTrainer(BaseTrainer):
             if name not in self.stats[loader.name].keys():
                 self.stats[loader.name][name] = AverageMeter()
             self.stats[loader.name][name].update(val, batch_size)
+            if name == "IoU":
+                if hasattr(val, "item"):
+                    val = val.item()
+                self.recent_iou[loader.name].append(float(val))
 
     def _print_stats(self, i, loader, batch_size):
         self.num_frames += batch_size
@@ -193,6 +259,9 @@ class LTRTrainer(BaseTrainer):
                         print_str += '%s: %.5f  ,  ' % (name, val.avg)
                     # else:
                     #     print_str += '%s: %r  ,  ' % (name, val)
+            if len(self.recent_iou[loader.name]) > 0:
+                iou_recent = sum(self.recent_iou[loader.name]) / len(self.recent_iou[loader.name])
+                print_str += 'IoU@%d: %.5f  ,  ' % (self.iou_window_size, iou_recent)
 
             print(print_str[:-5])
             log_str = print_str[:-5] + '\n'
