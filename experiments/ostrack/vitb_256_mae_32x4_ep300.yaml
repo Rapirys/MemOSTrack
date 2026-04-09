@@ -25,13 +25,13 @@ DATA:
       - GOT10K_train_full
     DATASETS_RATIO:
       - 1
-    SAMPLE_PER_EPOCH: 5000
+    SAMPLE_PER_EPOCH: 500
   VAL:
     DATASETS_NAME:
       - GOT10K_official_val
     DATASETS_RATIO:
       - 1
-    SAMPLE_PER_EPOCH: 1000
+    SAMPLE_PER_EPOCH: 50
 MODEL:
   PRETRAIN_FILE: "mae_pretrain_vit_base.pth"
   EXTRA_MERGER: False
@@ -42,6 +42,7 @@ MODEL:
   HEAD:
     TYPE: CENTER
     NUM_CHANNELS: 256
+
   MEMORY:
     ENABLED: True
     NUM_TOKENS: 8
@@ -60,6 +61,9 @@ TRAIN:
   NUM_WORKER: 10
   OPTIMIZER: ADAMW
   PRINT_INTERVAL: 50
+  # none, MemoryFilterLoss, DiMPSteepestDescentSolver
+  MEMORY_LOSS_TYPE: DiMPSteepestDescentSolver
+  MEMORY_WEIGHT: 0.001
   SCHEDULER:
     TYPE: step
     DECAY_RATE: 0.1
