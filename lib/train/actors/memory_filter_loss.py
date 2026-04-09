@@ -61,17 +61,18 @@ class MemoryFilterLoss:
             ff, bf, cf, hf, wf = search_feat.shape
             x_merged = search_feat.reshape(ff, bf * cf, hf, wf)  # (F, B*C, H, W)
             w_merged = mem_filter  # (B, C, k, k)
-            mem_response = F.conv2d(x_merged, w_merged, groups=bf, padding=k // 2)  # (F, B, H, W)
-            mem_response = mem_response.view(ff, bf, 1, hf, wf)
+            mem_response = F.conv2d(x_merged, w_merged, groups=bf, padding=k // 2)  # (F, B, Oh, Ow)
+            oh, ow = mem_response.shape[-2:]
+            mem_response = mem_response.view(ff, bf, 1, oh, ow)
 
             # Ensure spatial sizes match (in case of minor mismatch).
-            if mem_response.shape[-2:] != gt_gaussian_maps.shape[-2:]:
+            if (oh, ow) != gt_gaussian_maps.shape[-2:]:
                 gt_mem = F.interpolate(
                     gt_gaussian_maps.view(ff * bf, 1, *gt_gaussian_maps.shape[-2:]),
-                    size=mem_response.shape[-2:],
+                    size=(oh, ow),
                     mode="bilinear",
                     align_corners=False,
-                ).view(ff, bf, 1, hf, wf)
+                ).view(ff, bf, 1, oh, ow)
                 print("warning, investigate gt_mem spatial size")
             else:
                 gt_mem = gt_gaussian_maps
@@ -154,6 +155,11 @@ class DiMPSteepestDescentSolver:
         t_len, _, h, w = x.shape
         batch_size = groups
         _, channels, k, _ = f.shape
+        if k % 2 == 0:
+            raise ValueError(
+                "DiMPSteepestDescentSolver requires odd kernel size for padding=k//2 "
+                "to keep response and target spatial sizes aligned. Got k={}.".format(k)
+            )
 
         n = float(t_len * batch_size * h * w)
         m = float(batch_size * channels * k * k)
@@ -230,7 +236,9 @@ class DiMPSteepestDescentSolver:
                     h_t = F.conv2d(x[t0:t1], g, groups=batch_size, padding=padding)
                     ag2 = ag2 + (h_t * h_t).sum()
 
-            denom = (ag2 / n) + (float(lambda_reg) * gg / m) + self.eps
+            # Exact steepest-descent step for L(f)=||Af-y||^2/n + lambda||f||^2/m
+            # with full gradient g = dL/df.
+            denom = 2.0 * ((ag2 / n) + (float(lambda_reg) * gg / m)) + self.eps
             alpha = gg / denom
             if self.alpha_max is not None:
                 alpha = torch.clamp(alpha, max=float(self.alpha_max))
@@ -267,7 +275,10 @@ def compute_memory_filter_target_match_loss_dimp_sd(
     if not filter_frames or not feature_frames:
         return torch.tensor(0.0, device=device)
 
-    common_frames = [i for i in feature_frames if i < gt_gaussian_maps_all.shape[0]]
+    # gt_gaussian_maps_all is always a list from generate_heatmap()
+    gt_len = len(gt_gaussian_maps_all)
+
+    common_frames = [i for i in feature_frames if i < gt_len]
     if not common_frames:
         return torch.tensor(0.0, device=device)
 
