@@ -1,5 +1,8 @@
 from . import BaseActor
-from .memory_filter_loss import compute_memory_filter_loss
+from .memory_filter_loss import (
+    compute_memory_filter_loss,
+    compute_memory_filter_target_match_loss,
+)
 from lib.utils.misc import NestedTensor
 from lib.utils.box_ops import box_cxcywh_to_xyxy, box_xywh_to_xyxy
 import torch
@@ -26,6 +29,39 @@ class OSTrackActor(BaseActor):
         self.debug_seq_dir = "/home/illia/PycharmProjects/MemOSTrack/output/videos"
         if self.debug_save_seq:
             os.makedirs(self.debug_seq_dir, exist_ok=True)
+
+        self.memory_loss_weight = float(self.loss_weight.get('memory', 0.0))
+        memory_loss_cfg = str(getattr(self.cfg.TRAIN, "MEMORY_LOSS_TYPE", "none")).strip().lower()
+        self.memory_loss_fn, self.memory_loss_name = self._build_memory_loss(memory_loss_cfg)
+
+        if self.memory_loss_fn is not None:
+            memory_cfg = getattr(self.cfg.MODEL, "MEMORY", None)
+            mem_enabled = bool(getattr(memory_cfg, "ENABLED", False)) if memory_cfg is not None else False
+            mem_tokens = int(getattr(memory_cfg, "NUM_TOKENS", 0)) if memory_cfg is not None else 0
+            if not (mem_enabled and mem_tokens > 0):
+                raise ValueError(
+                    "TRAIN.MEMORY_LOSS_TYPE='{}' requires MODEL.MEMORY.ENABLED=True "
+                    "and MODEL.MEMORY.NUM_TOKENS>0.".format(self.memory_loss_name)
+                )
+
+    @staticmethod
+    def _build_memory_loss(memory_loss_cfg):
+        if memory_loss_cfg in {"", "none"}:
+            return None, "none"
+
+        if memory_loss_cfg in {"memoryfilterloss", "memory_filter_loss"}:
+            return compute_memory_filter_loss, "memoryfilterloss"
+
+        if memory_loss_cfg in {
+            "dimpsteepestdescentsolver",
+            "dimp_steepest_descent_solver"
+        }:
+            return compute_memory_filter_target_match_loss, "dimpsteepestdescentsolver"
+
+        raise ValueError(
+            "Unsupported TRAIN.MEMORY_LOSS_TYPE='{}'. Use one of: "
+            "none, MemoryFilterLoss, DiMPSteepestDescentSolver.".format(memory_loss_cfg)
+        )
 
     def __call__(self, data):
         """
@@ -169,13 +205,11 @@ class OSTrackActor(BaseActor):
         giou_loss = sum_giou_loss / num_frames
         l1_loss = sum_l1_loss / num_frames
         location_loss = sum_location_loss / num_frames
-        memory_weight = self.loss_weight.get('memory', 0.01)
-        # if memory_weight > 0:
-        #     mem_loss = compute_memory_filter_loss(pred_dict, gt_gaussian_maps_all, self.cfg, device)
-        # else:
-        #     mem_loss = torch.tensor(0.0, device=device)
-        # TODO: uncomment for real runs.
-        mem_loss = torch.tensor(0.0, device=device)
+        memory_weight = self.memory_loss_weight
+        if self.memory_loss_fn is not None and memory_weight > 0.0:
+            mem_loss = self.memory_loss_fn(pred_dict, gt_gaussian_maps_all, self.cfg, device)
+        else:
+            mem_loss = torch.tensor(0.0, device=device)
         mean_iou = torch.tensor(sum_iou / num_frames, device=device)
 
         # weighted sum

@@ -19,7 +19,8 @@ from lib.utils.box_ops import box_xyxy_to_cxcywh
 class OSTrack(nn.Module):
     """ This is the base class for OSTrack """
 
-    def __init__(self, transformer, box_head, mem_filter_head=None, aux_loss=False, head_type="CORNER"):
+    def __init__(self, transformer, box_head, mem_filter_head=None, aux_loss=False, head_type="CORNER",
+                 compute_memory_head=False):
         """ Initializes the model.
         Parameters:
             transformer: torch module of the transformer architecture.
@@ -29,6 +30,7 @@ class OSTrack(nn.Module):
         self.backbone = transformer
         self.box_head = box_head
         self.mem_filter_head = mem_filter_head
+        self.compute_memory_head = bool(compute_memory_head)
 
         self.aux_loss = aux_loss
         self.head_type = head_type
@@ -65,7 +67,8 @@ class OSTrack(nn.Module):
         # Memory filter head: predict DiMP-style filter from memory tokens.
         # No convolution here; trainer will use mem_filter_kernel + features.
         # ------------------------------------------------------------------
-        if (hasattr(self, 'mem_filter_head')
+        if (self.compute_memory_head
+                and hasattr(self, 'mem_filter_head')
                 and self.mem_filter_head is not None
                 and memory_tokens is not None):
             # memory_tokens: (B, K, C)
@@ -160,12 +163,17 @@ def build_ostrack(cfg, training=True):
 
     # Build memory filter head if memory is enabled in config
     mem_filter_head = None
+    compute_memory_head = False
     memory_cfg = getattr(cfg.MODEL, "MEMORY", None)
     if memory_cfg is not None:
         mem_enabled = getattr(memory_cfg, "ENABLED", False)
         mem_k = int(getattr(memory_cfg, "NUM_TOKENS", 0))
         if mem_enabled and mem_k > 0:
             mem_filter_head = build_memory_filter_head(cfg, hidden_dim)
+            memory_loss_type = str(getattr(cfg.TRAIN, "MEMORY_LOSS_TYPE", "none")).strip().lower()
+            memory_weight = float(getattr(cfg.TRAIN, "MEMORY_WEIGHT", 0.0))
+            memory_loss_disabled = memory_loss_type in {"", "none", "off", "disabled", "no"}
+            compute_memory_head = training and (not memory_loss_disabled) and memory_weight > 0.0
 
     model = OSTrack(
         backbone,
@@ -173,6 +181,7 @@ def build_ostrack(cfg, training=True):
         mem_filter_head=mem_filter_head,
         aux_loss=False,
         head_type=cfg.MODEL.HEAD.TYPE,
+        compute_memory_head=compute_memory_head,
     )
 
     if 'OSTrack' in cfg.MODEL.PRETRAIN_FILE and training:
