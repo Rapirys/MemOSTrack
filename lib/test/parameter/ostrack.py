@@ -1,7 +1,25 @@
 from lib.test.utils import TrackerParams
 import os
+import multiprocessing
 from lib.test.evaluation.environment import env_settings
 from lib.config.ostrack.config import cfg, update_config_from_file
+
+_PRINTED_TEST_CONFIG = False
+
+
+def _should_print_test_config_once():
+    global _PRINTED_TEST_CONFIG
+    if _PRINTED_TEST_CONFIG:
+        return False
+
+    proc_name = multiprocessing.current_process().name
+    # In sequential mode: MainProcess prints once.
+    # In parallel mode: allow only the first pool worker to print once.
+    if proc_name != "MainProcess" and not proc_name.endswith("-1"):
+        return False
+
+    _PRINTED_TEST_CONFIG = True
+    return True
 
 
 def parameters(yaml_name: str):
@@ -12,7 +30,8 @@ def parameters(yaml_name: str):
     yaml_file = os.path.join(prj_dir, 'experiments/ostrack/%s.yaml' % yaml_name)
     update_config_from_file(yaml_file)
     params.cfg = cfg
-    print("test config: ", cfg)
+    if _should_print_test_config_once():
+        print("test config: ", cfg)
 
     # template and search region
     params.template_factor = cfg.TEST.TEMPLATE_FACTOR
