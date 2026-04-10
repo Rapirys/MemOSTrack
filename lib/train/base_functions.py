@@ -22,6 +22,7 @@ def update_settings(settings, cfg):
     settings.print_stats = None
     settings.batchsize = cfg.TRAIN.BATCH_SIZE
     settings.scheduler_type = cfg.TRAIN.SCHEDULER.TYPE
+    settings.search_per_frame_jitter = bool(getattr(cfg.TRAIN, "SEARCH_PER_FRAME_JITTER", False))
 
 
 def names2datasets(name_list: list, settings, image_loader):

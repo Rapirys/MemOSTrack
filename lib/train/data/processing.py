@@ -65,6 +65,7 @@ class STARKProcessing(BaseProcessing):
         self.scale_jitter_factor = scale_jitter_factor
         self.mode = mode
         self.settings = settings
+        self.search_per_frame_jitter = bool(getattr(settings, "search_per_frame_jitter", False))
 
     def _get_jittered_box(self, box, mode, jitter_params=None):
         """ Jitter the input box
@@ -109,7 +110,12 @@ class STARKProcessing(BaseProcessing):
                 "In pair mode, num train/test frames must be 1"
 
             # Add a uniform noise to the center pos
-            if self.mode == 'sequence' and len(data[s + '_anno']) > 1:
+            use_shared_jitter = (
+                self.mode == 'sequence'
+                and len(data[s + '_anno']) > 1
+                and not (s == 'search' and self.search_per_frame_jitter)
+            )
+            if use_shared_jitter:
                 shared_jitter = (torch.randn(2), torch.rand(2) - 0.5)
                 jittered_anno = [self._get_jittered_box(a, s, jitter_params=shared_jitter)
                                  for a in data[s + '_anno']]
