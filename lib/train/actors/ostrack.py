@@ -234,16 +234,18 @@ class OSTrackActor(BaseActor):
                     mem_tokens = mem_tokens.detach()
             search_img = search_images[i].view(-1, *search_img_shape)  # (batch, 3, 320, 320)
             frame_blur_mask = blur_mask[i]
+            template_in = template_list
             if frame_blur_mask.any():
-                blurred_search = self._apply_memory_blur(search_img)
-                search_img = torch.where(frame_blur_mask.view(-1, 1, 1, 1), blurred_search, search_img)
+                blur_selector = frame_blur_mask.view(-1, 1, 1, 1)
+                blurred_template = self._apply_memory_blur(template_list)
+                template_in = torch.where(blur_selector, blurred_template, template_list)
             if self.debug_save_seq:
                 dbg_img = search_img[0].detach().cpu().permute(1, 2, 0).clamp(0, 1)
                 dbg_img = (dbg_img * 255).byte().numpy()
                 dbg_path = os.path.join(self.debug_seq_dir, f"{seq_tag}_search_{i:02d}_{self.debug_seq_idx:06d}.jpg")
                 cv2.imwrite(dbg_path, cv2.cvtColor(dbg_img, cv2.COLOR_RGB2BGR))
                 self.debug_seq_idx += 1
-            out_i = self.net(template=template_list,
+            out_i = self.net(template=template_in,
                              search=search_img,
                              ce_template_mask=box_mask_z,
                              ce_keep_rate=ce_keep_rate,
