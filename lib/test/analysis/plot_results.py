@@ -339,6 +339,11 @@ def print_results(trackers, dataset, report_name, merge_results=False,
     print('\nReporting results over {} / {} sequences'.format(valid_sequence.long().sum().item(), valid_sequence.shape[0]))
 
     scores = {}
+    avg_overlap_all = torch.tensor(eval_data['avg_overlap_all'])
+
+    # Average Overlap (AO): mean overlap over valid sequences, in percent.
+    ao = avg_overlap_all[valid_sequence, :].mean(0) * 100.0
+    scores['AO'] = ao
 
     # ********************************  Success Plot **************************************
     if 'success' in plot_types:
