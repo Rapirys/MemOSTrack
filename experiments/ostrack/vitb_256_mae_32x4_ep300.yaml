@@ -64,6 +64,8 @@ TRAIN:
   # none, MemoryFilterLoss, DiMPSteepestDescentSolver
   MEMORY_LOSS_TYPE: MemoryFilterLoss
   MEMORY_WEIGHT: 0.001
+  MEMORY_BLUR_ENABLED: True
+  MEMORY_BLUR_NUM_FRAMES: 2
   SCHEDULER:
     TYPE: step
     DECAY_RATE: 0.1

@@ -6,8 +6,10 @@ from .memory_filter_loss import (
 from lib.utils.misc import NestedTensor
 from lib.utils.box_ops import box_cxcywh_to_xyxy, box_xywh_to_xyxy
 import torch
+import torch.nn.functional as F
 import os
 import cv2
+import warnings
 from lib.utils.merge import merge_template_search
 from ...utils.heapmap_utils import generate_heatmap
 from ...utils.ce_utils import generate_mask_cond, adjust_keep_rate
@@ -33,6 +35,12 @@ class OSTrackActor(BaseActor):
         self.memory_loss_weight = float(self.loss_weight.get('memory', 0.0))
         memory_loss_cfg = str(getattr(self.cfg.TRAIN, "MEMORY_LOSS_TYPE", "none")).strip().lower()
         self.memory_loss_fn, self.memory_loss_name = self._build_memory_loss(memory_loss_cfg)
+        self._init_memory_blur()
+        if self.memory_blur_enabled and self.memory_loss_fn is not None:
+            raise ValueError(
+                "TRAIN.MEMORY_BLUR_ENABLED=True is not supported together with "
+                "TRAIN.MEMORY_LOSS_TYPE='{}'. Disable one of them.".format(self.memory_loss_name)
+            )
 
         if self.memory_loss_fn is not None:
             memory_cfg = getattr(self.cfg.MODEL, "MEMORY", None)
@@ -62,6 +70,95 @@ class OSTrackActor(BaseActor):
             "Unsupported TRAIN.MEMORY_LOSS_TYPE='{}'. Use one of: "
             "none, MemoryFilterLoss, DiMPSteepestDescentSolver.".format(memory_loss_cfg)
         )
+
+    def _init_memory_blur(self):
+        train_cfg = getattr(self.cfg, "TRAIN", None)
+        self.memory_blur_enabled = bool(getattr(train_cfg, "MEMORY_BLUR_ENABLED", False))
+        self.memory_blur_num_frames = int(getattr(train_cfg, "MEMORY_BLUR_NUM_FRAMES", 2))
+        self.memory_blur_kernel_size = int(getattr(train_cfg, "MEMORY_BLUR_KERNEL_SIZE", 19))
+        self.memory_blur_passes = int(getattr(train_cfg, "MEMORY_BLUR_PASSES", 2))
+        self.memory_blur_skip_first = 2
+        self.memory_blur_min_num_search = self.memory_blur_num_frames * 2 + self.memory_blur_skip_first
+
+        if not self.memory_blur_enabled:
+            return
+
+        if self.memory_blur_num_frames <= 0:
+            raise ValueError("TRAIN.MEMORY_BLUR_NUM_FRAMES must be > 0 when memory blur is enabled.")
+        if self.memory_blur_kernel_size <= 1 or self.memory_blur_kernel_size % 2 == 0:
+            raise ValueError(
+                "TRAIN.MEMORY_BLUR_KERNEL_SIZE must be an odd integer > 1. "
+                "Got {}.".format(self.memory_blur_kernel_size)
+            )
+        if self.memory_blur_passes <= 0:
+            raise ValueError("TRAIN.MEMORY_BLUR_PASSES must be > 0 when memory blur is enabled.")
+
+        cfg_num_search = int(getattr(self.cfg.DATA.SEARCH, "NUMBER", 0))
+        settings_num_search = int(getattr(self.settings, "num_search", cfg_num_search))
+        effective_num_search = settings_num_search if settings_num_search > 0 else cfg_num_search
+        if effective_num_search <= self.memory_blur_min_num_search:
+            raise ValueError(
+                "Memory blur requires number of search frames > k*2+2. "
+                "Got DATA.SEARCH.NUMBER={}, k={}, threshold={}.".format(
+                    effective_num_search,
+                    self.memory_blur_num_frames,
+                    self.memory_blur_min_num_search,
+                )
+            )
+
+    def _select_blur_frame_indices(self, num_search):
+        if not self.memory_blur_enabled or not self.net.training:
+            return set()
+
+        if num_search < self.memory_blur_min_num_search:
+            warnings.warn(
+                "Received short sequence with {} search frames while memory blur needs at least {} "
+                "(k={}, formula k*2+2). Skipping blur for this sample.".format(
+                    num_search,
+                    self.memory_blur_min_num_search,
+                    self.memory_blur_num_frames,
+                )
+            )
+            return set()
+
+        candidates = torch.arange(self.memory_blur_skip_first, num_search, dtype=torch.long)
+        if candidates.numel() < self.memory_blur_num_frames:
+            warnings.warn(
+                "Insufficient blur candidates ({} available, need {}). Skipping blur for this sample.".format(
+                    candidates.numel(),
+                    self.memory_blur_num_frames,
+                )
+            )
+            return set()
+
+        rand_idx = torch.randperm(candidates.numel())[:self.memory_blur_num_frames]
+        selected = candidates[rand_idx].tolist()
+        return set(int(i) for i in selected)
+
+    def _build_blur_mask(self, num_search, batch_size, device):
+        blur_mask = torch.zeros((num_search, batch_size), dtype=torch.bool, device=device)
+        if not self.memory_blur_enabled or not self.net.training:
+            return blur_mask
+
+        for b in range(batch_size):
+            frame_indices = self._select_blur_frame_indices(num_search)
+            if not frame_indices:
+                continue
+            idx_tensor = torch.tensor(sorted(frame_indices), dtype=torch.long, device=device)
+            blur_mask[idx_tensor, b] = True
+        return blur_mask
+
+    def _apply_memory_blur(self, search_img):
+        blurred = search_img
+        for _ in range(self.memory_blur_passes):
+            blurred = F.avg_pool2d(
+                blurred,
+                kernel_size=self.memory_blur_kernel_size,
+                stride=1,
+                padding=self.memory_blur_kernel_size // 2,
+                count_include_pad=False,
+            )
+        return blurred
 
     def __call__(self, data):
         """
@@ -129,12 +226,17 @@ class OSTrackActor(BaseActor):
         if hasattr(self.net, 'backbone') and hasattr(self.net.backbone, 'init_memory') and getattr(self.net.backbone, 'memory_tokens', 0) > 0:
             mem_tokens = self.net.backbone.init_memory(batch_size, device=search_images.device, dtype=search_images.dtype)
 
+        blur_mask = self._build_blur_mask(num_search, batch_size, search_images.device)
         out_dict = []
         for i in range(num_search):
             if max_bptt_steps > 0 and i > 0 and mem_tokens is not None:
                 if i % (max_bptt_steps + 1) == 0:
                     mem_tokens = mem_tokens.detach()
             search_img = search_images[i].view(-1, *search_img_shape)  # (batch, 3, 320, 320)
+            frame_blur_mask = blur_mask[i]
+            if frame_blur_mask.any():
+                blurred_search = self._apply_memory_blur(search_img)
+                search_img = torch.where(frame_blur_mask.view(-1, 1, 1, 1), blurred_search, search_img)
             if self.debug_save_seq:
                 dbg_img = search_img[0].detach().cpu().permute(1, 2, 0).clamp(0, 1)
                 dbg_img = (dbg_img * 255).byte().numpy()
@@ -149,6 +251,7 @@ class OSTrackActor(BaseActor):
                              mem_tokens=mem_tokens)
             if 'memory_tokens' in out_i:
                 mem_tokens = out_i['memory_tokens']
+            out_i['is_blurred_frame'] = bool(frame_blur_mask.any().item())
             out_dict.append(out_i)
 
      #   print ("Debug: out_dict =", len(out_dict))
@@ -164,10 +267,7 @@ class OSTrackActor(BaseActor):
             raise ValueError("Empty prediction sequence in compute_losses.")
 
         device = pred_dict[0]['pred_boxes'].device
-        sum_giou_loss = torch.tensor(0.0, device=device)
-        sum_l1_loss = torch.tensor(0.0, device=device)
-        sum_location_loss = torch.tensor(0.0, device=device)
-        sum_iou = 0.0
+        frame_metrics = []
         # TODO: maybe add check that num_frames matches GT length
         for t in range(num_frames):
             # gt for frame t
@@ -197,36 +297,89 @@ class OSTrackActor(BaseActor):
             else:
                 location_loss_t = torch.tensor(0.0, device=device)
 
-            sum_giou_loss += giou_loss_t
-            sum_l1_loss += l1_loss_t
-            sum_location_loss += location_loss_t
-            sum_iou += iou_t.detach().mean().item()
+            frame_metrics.append({
+                "giou": giou_loss_t,
+                "l1": l1_loss_t,
+                "location": location_loss_t,
+                "iou": float(iou_t.detach().mean().item()),
+            })
 
-        giou_loss = sum_giou_loss / num_frames
-        l1_loss = sum_l1_loss / num_frames
-        location_loss = sum_location_loss / num_frames
+        def _aggregate(indices):
+            if not indices:
+                return {
+                    "giou": torch.tensor(0.0, device=device),
+                    "l1": torch.tensor(0.0, device=device),
+                    "location": torch.tensor(0.0, device=device),
+                    "iou": torch.tensor(0.0, device=device),
+                }
+
+            sum_giou = torch.tensor(0.0, device=device)
+            sum_l1 = torch.tensor(0.0, device=device)
+            sum_location = torch.tensor(0.0, device=device)
+            sum_iou = 0.0
+            for idx in indices:
+                m = frame_metrics[idx]
+                sum_giou = sum_giou + m["giou"]
+                sum_l1 = sum_l1 + m["l1"]
+                sum_location = sum_location + m["location"]
+                sum_iou += m["iou"]
+
+            denom = float(len(indices))
+            return {
+                "giou": sum_giou / denom,
+                "l1": sum_l1 / denom,
+                "location": sum_location / denom,
+                "iou": torch.tensor(sum_iou / denom, device=device),
+            }
+
+        all_indices = list(range(num_frames))
+        blurred_indices = [i for i, pred_t in enumerate(pred_dict) if bool(pred_t.get("is_blurred_frame", False))]
+        clean_indices = [i for i in all_indices if i not in blurred_indices]
+        if not clean_indices:
+            clean_indices = all_indices
+
+        all_stats = _aggregate(all_indices)
+        clean_stats = _aggregate(clean_indices)
+        blur_stats = _aggregate(blurred_indices)
+
         memory_weight = self.memory_loss_weight
         if self.memory_loss_fn is not None and memory_weight > 0.0:
             mem_loss = self.memory_loss_fn(pred_dict, gt_gaussian_maps_all, self.cfg, device)
         else:
             mem_loss = torch.tensor(0.0, device=device)
-        mean_iou = torch.tensor(sum_iou / num_frames, device=device)
 
-        # weighted sum
-        loss = (self.loss_weight['giou'] * giou_loss
-                + self.loss_weight['l1'] * l1_loss
-                + self.loss_weight['focal'] * location_loss
+        # Optimization loss uses all frames.
+        loss = (self.loss_weight['giou'] * all_stats["giou"]
+                + self.loss_weight['l1'] * all_stats["l1"]
+                + self.loss_weight['focal'] * all_stats["location"]
                 + memory_weight * mem_loss)
 
         if return_status:
-            # status for log
-            status = {"Loss/total": loss.item(),
-                      "Loss/giou": giou_loss.item(),
-                      "Loss/l1": l1_loss.item(),
-                      "Loss/location": location_loss.item(),
-                      "Loss/memory": mem_loss.item(),
-                      "Loss/memory weighted": (memory_weight * mem_loss).item(),
-                      "IoU": mean_iou.item()}
+            clean_total = (self.loss_weight['giou'] * clean_stats["giou"]
+                           + self.loss_weight['l1'] * clean_stats["l1"]
+                           + self.loss_weight['focal'] * clean_stats["location"]
+                           + memory_weight * mem_loss)
+            blur_total = (self.loss_weight['giou'] * blur_stats["giou"]
+                          + self.loss_weight['l1'] * blur_stats["l1"]
+                          + self.loss_weight['focal'] * blur_stats["location"])
+
+            # Status for logs. Blurred-frame metrics are reported separately.
+            status = {
+                "Loss/total": clean_total.item(),
+                "Loss/total optim": loss.item(),
+                "Loss/giou": clean_stats["giou"].item(),
+                "Loss/l1": clean_stats["l1"].item(),
+                "Loss/location": clean_stats["location"].item(),
+                "Loss/memory": mem_loss.item(),
+                "Loss/memory weighted": (memory_weight * mem_loss).item(),
+                "IoU": clean_stats["iou"].item(),
+                "Blur/frames": float(len(blurred_indices)),
+                "Blur/Loss/total": blur_total.item(),
+                "Blur/Loss/giou": blur_stats["giou"].item(),
+                "Blur/Loss/l1": blur_stats["l1"].item(),
+                "Blur/Loss/location": blur_stats["location"].item(),
+                "Blur/IoU": blur_stats["iou"].item(),
+            }
             return loss, status
         else:
             return loss
