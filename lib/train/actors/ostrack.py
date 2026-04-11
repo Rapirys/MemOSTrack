@@ -107,7 +107,7 @@ class OSTrackActor(BaseActor):
             )
 
     def _select_blur_frame_indices(self, num_search):
-        if not self.memory_blur_enabled or not self.net.training:
+        if not self.memory_blur_enabled:
             return set()
 
         if num_search < self.memory_blur_min_num_search:
@@ -137,7 +137,7 @@ class OSTrackActor(BaseActor):
 
     def _build_blur_mask(self, num_search, batch_size, device):
         blur_mask = torch.zeros((num_search, batch_size), dtype=torch.bool, device=device)
-        if not self.memory_blur_enabled or not self.net.training:
+        if not self.memory_blur_enabled:
             return blur_mask
 
         for b in range(batch_size):
