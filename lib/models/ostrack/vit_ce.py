@@ -135,6 +135,15 @@ class VisionTransformerCE(VisionTransformer):
         x = combine_tokens(z, x, mode=self.cat_mode)
         if self.add_cls_token:
             x = torch.cat([cls_tokens, x], dim=1)
+            if mask_x is not None:
+                # CLS token is a valid token and should not be masked.
+                cls_mask = torch.zeros([B, 1], device=x.device, dtype=mask_x.dtype)
+                mask_x = torch.cat([cls_mask, mask_x], dim=1)
+            if ce_template_mask is not None:
+                # Keep CE template mask aligned with template-side token count.
+                # CLS is not a spatial template token, so exclude it from CE pooling.
+                cls_ce_mask = torch.zeros([B, 1], device=x.device, dtype=ce_template_mask.dtype)
+                ce_template_mask = torch.cat([cls_ce_mask, ce_template_mask], dim=1)
 
         x = self.pos_drop(x)
 
@@ -153,6 +162,8 @@ class VisionTransformerCE(VisionTransformer):
                 ce_template_mask = torch.cat([mem_ce_mask, ce_template_mask], dim=1)
 
         lens_z = self.pos_embed_z.shape[1]
+        if self.add_cls_token:
+            lens_z = lens_z + 1
         lens_x = self.pos_embed_x.shape[1]
 
         if self.memory_tokens > 0:
@@ -178,10 +189,16 @@ class VisionTransformerCE(VisionTransformer):
         z = x[:, :lens_z_new]
         x = x[:, lens_z_new:]
 
+        cls_out = None
         if self.memory_tokens > 0:
             mem_out = z[:, :self.memory_tokens, :]
             z = z[:, self.memory_tokens:, :]
             lens_z_new = lens_z_new - self.memory_tokens
+
+        if self.add_cls_token:
+            cls_out = z[:, :1, :]
+            z = z[:, 1:, :]
+            lens_z_new = lens_z_new - 1
 
         if removed_indexes_s and removed_indexes_s[0] is not None:
             removed_indexes_cat = torch.cat(removed_indexes_s, dim=1)
@@ -199,6 +216,8 @@ class VisionTransformerCE(VisionTransformer):
 
         # re-concatenate with the template, which may be further used by other modules
         x = torch.cat([z, x], dim=1)
+        if cls_out is not None:
+            x = torch.cat([cls_out, x], dim=1)
 
         aux_dict = {
             "attn": attn,
