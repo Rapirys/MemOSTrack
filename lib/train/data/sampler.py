@@ -1,4 +1,5 @@
 import random
+import torch
 import torch.utils.data
 from lib.utils import TensorDict
 import numpy as np
@@ -53,9 +54,41 @@ class TrackingSampler(torch.utils.data.Dataset):
         self.num_template_frames = num_template_frames
         self.processing = processing
         self.frame_sample_mode = frame_sample_mode
+        self.log_skips = True
+        self.skip_log_every = 200
+        self.max_seq_sampling_attempts = 200
+        self._skip_count = 0
+        self._skip_log_lines = 0
+        self._skip_log_lines_max = 1000
 
     def __len__(self):
         return self.samples_per_epoch
+
+    def _log_skip(self, reason):
+        self._skip_count += 1
+        if not self.log_skips:
+            return
+        if self._skip_log_lines >= self._skip_log_lines_max:
+            return
+        if self._skip_count % self.skip_log_every != 0:
+            return
+        worker_info = torch.utils.data.get_worker_info()
+        worker_id = worker_info.id if worker_info is not None else "main"
+        print("[TrackingSampler][worker={}] skipped_total={} latest_reason={}".format(
+            worker_id, self._skip_count, reason
+        ))
+        self._skip_log_lines += 1
+
+    @staticmethod
+    def _consecutive_valid_starts(visible, valid, total_required):
+        vis = visible.to(torch.bool)
+        val = valid.to(torch.bool) if valid is not None else vis
+        ok = vis & val
+        if ok.numel() < total_required:
+            return []
+        # Sliding window over frame ids; we only keep windows where all frames are visible+valid.
+        windows = ok.unfold(0, total_required, 1)
+        return torch.nonzero(windows.all(dim=1), as_tuple=False).flatten().tolist()
 
     def _sample_visible_ids(self, visible, num_ids=1, min_id=None, max_id=None,
                             allow_invisible=False, force_invisible=False):
@@ -139,12 +172,23 @@ class TrackingSampler(torch.utils.data.Dataset):
                     seq_len = len(visible)
                     total_required = self.num_template_frames + self.num_search_frames
                     if total_required > seq_len:
-                        raise ValueError(f"Requested {total_required} frames (template + search), but sequence length "
-                                         f"is {seq_len}. Reduce cfg.DATA.TEMPLATE.NUMBER and/or cfg.DATA.SEARCH.NUMBER.")
-                    max_start = seq_len - total_required
-                    start_id = random.randint(0, max_start)
-                    #TODO: This is “consecutive indices” in [0..len(visible)-1], not necessarily consecutive actual video frames.
-                    # check that frames are consecutive
+                        self._log_skip(
+                            "sequence too short for causal_consecutive: need {}, got {}.".format(
+                                total_required, seq_len
+                            )
+                        )
+                        continue
+                    valid = seq_info_dict.get('valid', visible)
+                    candidate_starts = self._consecutive_valid_starts(visible, valid, total_required)
+                    if len(candidate_starts) == 0:
+                        self._log_skip(
+                            "no visible+valid consecutive window of length {} in seq_id={}.".format(
+                                total_required, seq_id
+                            )
+                        )
+                        continue
+                    # TODO: This is "consecutive indices" in [0..len(visible)-1], not necessarily consecutive actual video frames.
+                    start_id = random.choice(candidate_starts)
                     template_frame_ids = list(range(start_id, start_id + self.num_template_frames))
                     search_frame_ids = list(range(start_id + self.num_template_frames,
                                                   start_id + total_required))
@@ -180,7 +224,11 @@ class TrackingSampler(torch.utils.data.Dataset):
 
                 # check whether data is valid
                 valid = data['valid']
-            except:
+                if not valid:
+                    invalid_reason = data.get('invalid_reason', 'processing returned valid=False')
+                    self._log_skip("processing rejected sample: {}.".format(invalid_reason))
+            except Exception as exc:
+                self._log_skip("exception while building sample: {}: {}.".format(type(exc).__name__, str(exc)))
                 valid = False
 
         return data
@@ -264,7 +312,11 @@ class TrackingSampler(torch.utils.data.Dataset):
                 data["label"] = label
                 # check whether data is valid
                 valid = data['valid']
-            except:
+                if not valid:
+                    invalid_reason = data.get('invalid_reason', 'processing returned valid=False')
+                    self._log_skip("processing rejected classification sample: {}.".format(invalid_reason))
+            except Exception as exc:
+                self._log_skip("exception while building classification sample: {}: {}.".format(type(exc).__name__, str(exc)))
                 valid = False
 
         return data
@@ -277,7 +329,9 @@ class TrackingSampler(torch.utils.data.Dataset):
 
         # Sample a sequence with enough visible frames
         enough_visible_frames = False
+        attempts = 0
         while not enough_visible_frames:
+            attempts += 1
             # Sample a sequence
             seq_id = random.randint(0, dataset.get_num_sequences() - 1)
 
@@ -285,10 +339,21 @@ class TrackingSampler(torch.utils.data.Dataset):
             seq_info_dict = dataset.get_sequence_info(seq_id)
             visible = seq_info_dict['visible']
 
-            enough_visible_frames = visible.type(torch.int64).sum().item() > 2 * (
-                    self.num_search_frames + self.num_template_frames) and len(visible) >= 20
+            if self.frame_sample_mode == "causal_consecutive":
+                total_required = self.num_search_frames + self.num_template_frames
+                enough_visible_frames = len(visible) >= total_required
+            else:
+                enough_visible_frames = visible.type(torch.int64).sum().item() > 2 * (
+                        self.num_search_frames + self.num_template_frames) and len(visible) >= 20
 
             enough_visible_frames = enough_visible_frames or not is_video_dataset
+            if (not enough_visible_frames) and (attempts >= self.max_seq_sampling_attempts):
+                self._log_skip(
+                    "max sequence sampling attempts reached ({}); using latest sampled seq_id={}.".format(
+                        self.max_seq_sampling_attempts, seq_id
+                    )
+                )
+                return seq_id, visible, seq_info_dict
         return seq_id, visible, seq_info_dict
 
     def get_one_search(self):

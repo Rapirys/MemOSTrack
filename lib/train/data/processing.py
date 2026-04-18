@@ -128,6 +128,7 @@ class STARKProcessing(BaseProcessing):
             crop_sz = torch.ceil(torch.sqrt(w * h) * self.search_area_factor[s])
             if (crop_sz < 1).any():
                 data['valid'] = False
+                data['invalid_reason'] = "{} crop too small after jitter".format(s)
                 # print("Too small box is found. Replace it with new data.")
                 return data
 
@@ -149,6 +150,7 @@ class STARKProcessing(BaseProcessing):
             for ele in data[s + '_att']:
                 if (ele == 1).all():
                     data['valid'] = False
+                    data['invalid_reason'] = "{} attention mask is all ones".format(s)
                     # print("Values of original attention mask are all one. Replace it with new data.")
                     return data
             # 2021.1.10 more strict conditions: require the donwsampled masks not to be all 1
@@ -158,11 +160,13 @@ class STARKProcessing(BaseProcessing):
                 mask_down = F.interpolate(ele[None, None].float(), size=feat_size).to(torch.bool)[0]
                 if (mask_down == 1).all():
                     data['valid'] = False
+                    data['invalid_reason'] = "{} downsampled attention mask is all ones".format(s)
                     # print("Values of down-sampled attention mask are all one. "
                     #       "Replace it with new data.")
                     return data
 
         data['valid'] = True
+        data['invalid_reason'] = None
         # if we use copy-and-paste augmentation
         if data["template_masks"] is None or data["search_masks"] is None:
             data["template_masks"] = torch.zeros((1, self.output_sz["template"], self.output_sz["template"]))
