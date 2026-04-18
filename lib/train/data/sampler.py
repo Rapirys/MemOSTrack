@@ -178,8 +178,9 @@ class TrackingSampler(torch.utils.data.Dataset):
                             )
                         )
                         continue
-                    valid = seq_info_dict.get('valid', visible)
-                    candidate_starts = self._consecutive_valid_starts(visible, valid, total_required)
+                        ##TODO: Check recent sampler changes that skip invalid frames.
+                    seq_valid = seq_info_dict.get('valid', visible)
+                    candidate_starts = self._consecutive_valid_starts(visible, seq_valid, total_required)
                     if len(candidate_starts) == 0:
                         self._log_skip(
                             "no visible+valid consecutive window of length {} in seq_id={}.".format(
