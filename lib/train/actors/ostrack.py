@@ -287,10 +287,9 @@ class OSTrackActor(BaseActor):
                                                                                                                max=1.0)  # (B,4) --> (B,1,4) --> (B,N,4)
 
             # compute giou and iou
-            try:
-                giou_loss_t, iou_t = self.objective['giou'](pred_boxes_vec, gt_boxes_vec)  # (BN,4) (BN,4)
-            except:
-                giou_loss_t, iou_t = torch.tensor(0.0, device=device), torch.tensor(0.0, device=device)
+            giou_loss_t, iou_t = self.objective['giou'](pred_boxes_vec, gt_boxes_vec)  # (BN,4) (BN,4)
+            if (not torch.isfinite(giou_loss_t)) or (not torch.isfinite(iou_t).all()):
+                raise ValueError("Non-finite GIoU/IoU encountered during loss computation.")
             # compute l1 loss
             l1_loss_t = self.objective['l1'](pred_boxes_vec, gt_boxes_vec)  # (BN,4) (BN,4)
             # compute location loss for main head

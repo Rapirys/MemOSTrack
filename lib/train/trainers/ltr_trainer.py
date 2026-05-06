@@ -53,6 +53,7 @@ class LTRTrainer(BaseTrainer):
         self.settings = settings
         self.use_amp = use_amp
         self.debug_integrity_checks = getattr(settings, "debug_integrity_checks", True)
+        self.debug_mode_checks = getattr(settings, "debug_mode_checks", False)
         self.debug_log_lr_each_step = getattr(settings, "debug_log_lr_each_step", True)
         self.iou_window_size = int(getattr(settings, "iou_window_size", 50))
         self.recent_iou = OrderedDict({loader.name: deque(maxlen=self.iou_window_size) for loader in self.loaders})
@@ -101,7 +102,8 @@ class LTRTrainer(BaseTrainer):
 
         self.actor.train(loader.training)
         torch.set_grad_enabled(loader.training)
-        print(f"[ModeCheck] epoch={self.epoch} loader={loader.name} loader.training={loader.training} model.training={self.actor.net.training} grad_enabled={torch.is_grad_enabled()}")
+        if self.debug_mode_checks:
+            print(f"[ModeCheck] epoch={self.epoch} loader={loader.name} loader.training={loader.training} model.training={self.actor.net.training} grad_enabled={torch.is_grad_enabled()}")
 
         val_param_before = None
         val_bn_before = None

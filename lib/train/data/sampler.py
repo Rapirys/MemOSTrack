@@ -136,7 +136,22 @@ class TrackingSampler(torch.utils.data.Dataset):
             TensorDict - dict containing all the data blocks
         """
         valid = False
+        attempts = 0
+        max_attempts = self.max_seq_sampling_attempts * 10
+        last_error = "unknown"
         while not valid:
+            attempts += 1
+            if attempts > max_attempts:
+                raise RuntimeError(
+                    "TrackingSampler.getitem exceeded max attempts ({}). "
+                    "frame_sample_mode='{}', num_template_frames={}, num_search_frames={}, last_error={}.".format(
+                        max_attempts,
+                        self.frame_sample_mode,
+                        self.num_template_frames,
+                        self.num_search_frames,
+                        last_error,
+                    )
+                )
             # Select a dataset
             dataset = random.choices(self.datasets, self.p_datasets)[0]
 
@@ -227,8 +242,10 @@ class TrackingSampler(torch.utils.data.Dataset):
                 valid = data['valid']
                 if not valid:
                     invalid_reason = data.get('invalid_reason', 'processing returned valid=False')
+                    last_error = invalid_reason
                     self._log_skip("processing rejected sample: {}.".format(invalid_reason))
             except Exception as exc:
+                last_error = "{}: {}".format(type(exc).__name__, str(exc))
                 self._log_skip("exception while building sample: {}: {}.".format(type(exc).__name__, str(exc)))
                 valid = False
 
@@ -246,7 +263,22 @@ class TrackingSampler(torch.utils.data.Dataset):
         """
         valid = False
         label = None
+        attempts = 0
+        max_attempts = self.max_seq_sampling_attempts * 10
+        last_error = "unknown"
         while not valid:
+            attempts += 1
+            if attempts > max_attempts:
+                raise RuntimeError(
+                    "TrackingSampler.getitem_cls exceeded max attempts ({}). "
+                    "frame_sample_mode='{}', num_template_frames={}, num_search_frames={}, last_error={}.".format(
+                        max_attempts,
+                        self.frame_sample_mode,
+                        self.num_template_frames,
+                        self.num_search_frames,
+                        last_error,
+                    )
+                )
             # Select a dataset
             dataset = random.choices(self.datasets, self.p_datasets)[0]
 
@@ -315,8 +347,10 @@ class TrackingSampler(torch.utils.data.Dataset):
                 valid = data['valid']
                 if not valid:
                     invalid_reason = data.get('invalid_reason', 'processing returned valid=False')
+                    last_error = invalid_reason
                     self._log_skip("processing rejected classification sample: {}.".format(invalid_reason))
             except Exception as exc:
+                last_error = "{}: {}".format(type(exc).__name__, str(exc))
                 self._log_skip("exception while building classification sample: {}: {}.".format(type(exc).__name__, str(exc)))
                 valid = False
 

@@ -85,7 +85,6 @@ class OSTrack(nn.Module):
             out['search_feat'] = search_feat
 
         out.update(aux_dict)
-        out['backbone_feat'] = x
         return out
 
     def forward_head(self, cat_feature, gt_score_map=None, memory_tokens=None):
