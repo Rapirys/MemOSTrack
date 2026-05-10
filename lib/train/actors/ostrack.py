@@ -221,10 +221,9 @@ class OSTrackActor(BaseActor):
             template_list = template_list[0]
 
         mem_tokens = None
+        is_first_frame = True
         mem_cfg = getattr(self.cfg.MODEL, "MEMORY", None)
         max_bptt_steps = int(getattr(mem_cfg, "BPTT_STEPS", -1)) if mem_cfg is not None else -1
-        if hasattr(self.net, 'backbone') and hasattr(self.net.backbone, 'init_memory') and getattr(self.net.backbone, 'memory_tokens', 0) > 0:
-            mem_tokens = self.net.backbone.init_memory(batch_size, device=search_images.device, dtype=search_images.dtype)
 
         blur_mask = self._build_blur_mask(num_search, batch_size, search_images.device)
         out_dict = []
@@ -250,9 +249,12 @@ class OSTrackActor(BaseActor):
                              ce_template_mask=box_mask_z,
                              ce_keep_rate=ce_keep_rate,
                              return_last_attn=False,
-                             mem_tokens=mem_tokens)
-            if 'memory_tokens' in out_i:
-                mem_tokens = out_i['memory_tokens']
+                             mem_tokens=mem_tokens,
+                             is_first_frame=is_first_frame)
+            is_first_frame = False
+            mem_tokens_layers = out_i.get('memory_tokens_layers')
+            if mem_tokens_layers is not None:
+                mem_tokens = mem_tokens_layers
             out_i['is_blurred_frame'] = bool(frame_blur_mask.any().item())
             out_dict.append(out_i)
 

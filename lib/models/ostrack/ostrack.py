@@ -47,12 +47,14 @@ class OSTrack(nn.Module):
                 ce_keep_rate=None,
                 return_last_attn=False,
                 mem_tokens=None,
+                is_first_frame=False,
                 ):
         x, aux_dict = self.backbone(z=template, x=search,
                                     ce_template_mask=ce_template_mask,
                                     ce_keep_rate=ce_keep_rate,
                                     return_last_attn=return_last_attn,
-                                    mem_tokens=mem_tokens, )
+                                    mem_tokens=mem_tokens,
+                                    is_first_frame=is_first_frame)
 
         # Forward head
         feat_last = x

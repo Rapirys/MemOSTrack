@@ -64,8 +64,7 @@ class OSTrack(BaseTracker):
             self.box_mask_z = generate_mask_cond(self.cfg, 1, template.tensors.device, template_bbox)
 
         self.mem_tokens = None
-        if hasattr(self.network, 'backbone') and hasattr(self.network.backbone, 'init_memory') and getattr(self.network.backbone, 'memory_tokens', 0) > 0:
-            self.mem_tokens = self.network.backbone.init_memory(1, device=template.tensors.device, dtype=template.tensors.dtype)
+        self.is_first_frame = True
 
         # save states
         self.state = info['init_bbox']
@@ -87,10 +86,16 @@ class OSTrack(BaseTracker):
             # merge the template and the search
             # run the transformer
             out_dict = self.network.forward(
-                template=self.z_dict1.tensors, search=x_dict.tensors, ce_template_mask=self.box_mask_z, mem_tokens=self.mem_tokens)
+                template=self.z_dict1.tensors,
+                search=x_dict.tensors,
+                ce_template_mask=self.box_mask_z,
+                mem_tokens=self.mem_tokens,
+                is_first_frame=self.is_first_frame)
+            self.is_first_frame = False
 
-            if 'memory_tokens' in out_dict:
-                self.mem_tokens = out_dict['memory_tokens']
+            mem_tokens_layers = out_dict.get('memory_tokens_layers')
+            if mem_tokens_layers is not None:
+                self.mem_tokens = mem_tokens_layers
 
         # add hann windows
         pred_score_map = out_dict['score_map']

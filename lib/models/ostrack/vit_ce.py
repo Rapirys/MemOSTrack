@@ -102,7 +102,8 @@ class VisionTransformerCE(VisionTransformer):
     def forward_features(self, z, x, mask_z=None, mask_x=None,
                          ce_template_mask=None, ce_keep_rate=None,
                          return_last_attn=False,
-                         mem_tokens=None
+                         mem_tokens=None,
+                         is_first_frame=False
                          ):
         B, H, W = x.shape[0], x.shape[2], x.shape[3]
 
@@ -145,21 +146,35 @@ class VisionTransformerCE(VisionTransformer):
                 cls_ce_mask = torch.zeros([B, 1], device=x.device, dtype=ce_template_mask.dtype)
                 ce_template_mask = torch.cat([cls_ce_mask, ce_template_mask], dim=1)
 
+        if self.memory_tokens > 0 and ce_template_mask is None:
+            # CE "ALL" mode: include all spatial template tokens in pooling,
+            # but keep non-spatial prefix tokens (CLS/memory) excluded.
+            ce_template_mask = torch.ones([B, self.pos_embed_z.shape[1]], device=x.device, dtype=torch.bool)
+            if self.add_cls_token:
+                cls_ce_mask = torch.zeros([B, 1], device=x.device, dtype=torch.bool)
+                ce_template_mask = torch.cat([cls_ce_mask, ce_template_mask], dim=1)
+
         x = self.pos_drop(x)
 
-        mem_out = None
+        M_out = None
+        M_layers_out = None
         if self.memory_tokens > 0:
-            if mem_tokens is None:
-                mem_tokens = self.init_memory(B, device=x.device, dtype=x.dtype)
-            if self.read_mem_embed is not None:
-                mem_tokens = mem_tokens + self.read_mem_embed.to(device=x.device, dtype=x.dtype)
-            x = torch.cat([mem_tokens, x], dim=1)
+            use_gru = (mem_tokens is not None) and (not is_first_frame)
+            M_prev_layers = self._prepare_layer_memory(mem_tokens, B, x.device, x.dtype)
+
             if mask_x is not None:
                 mem_mask = torch.zeros([B, self.memory_tokens], device=x.device, dtype=mask_x.dtype)
                 mask_x = torch.cat([mem_mask, mask_x], dim=1)
             if ce_template_mask is not None:
-                mem_ce_mask = torch.ones([B, self.memory_tokens], device=x.device, dtype=ce_template_mask.dtype)
+                # Memory tokens are part of attention, but excluded from CE pooling.
+                mem_ce_mask = torch.zeros([B, self.memory_tokens], device=x.device, dtype=ce_template_mask.dtype)
                 ce_template_mask = torch.cat([mem_ce_mask, ce_template_mask], dim=1)
+
+            M_prev_layer = M_prev_layers[0]
+            if self.read_mem_embed is not None:
+                M_prev_layer = M_prev_layer + self.read_mem_embed.to(device=x.device, dtype=x.dtype)
+            visual_tokens = x
+            M_current_layers = []
 
         lens_z = self.pos_embed_z.shape[1]
         if self.add_cls_token:
@@ -175,12 +190,34 @@ class VisionTransformerCE(VisionTransformer):
         global_index_s = torch.linspace(0, lens_x - 1, lens_x).to(x.device)
         global_index_s = global_index_s.repeat(B, 1)
         removed_indexes_s = []
-        for i, blk in enumerate(self.blocks):
+        for l, blk in enumerate(self.blocks):
+            if self.memory_tokens > 0:
+                M_in = M_prev_layer
+                x = torch.cat([M_in, visual_tokens], dim=1)
+
             x, global_index_t, global_index_s, removed_index_s, attn = \
                 blk(x, global_index_t, global_index_s, mask_x, ce_template_mask, ce_keep_rate)
 
-            if self.ce_loc is not None and i in self.ce_loc:
+            if self.memory_tokens > 0:
+                M_hat = x[:, :self.memory_tokens, :]
+                visual_tokens = x[:, self.memory_tokens:, :]
+                if use_gru:
+                    M_prev_time = M_prev_layers[l]
+                    M_current = self._update_memory_with_gru(l, M_prev_time, M_hat)
+                else:
+                    M_current = M_hat
+                    if self.mem_norms is not None and l < len(self.mem_norms):
+                        M_current = self.mem_norms[l](M_current)
+                M_current_layers.append(M_current)
+
+                M_prev_layer = M_current
+
+            if self.ce_loc is not None and l in self.ce_loc:
                 removed_indexes_s.append(removed_index_s)
+
+        if self.memory_tokens > 0:
+            x = torch.cat([M_current, visual_tokens], dim=1)
+            M_layers_out = torch.stack(M_current_layers, dim=0)
 
         x = self.norm(x)
         lens_x_new = global_index_s.shape[1]
@@ -191,7 +228,7 @@ class VisionTransformerCE(VisionTransformer):
 
         cls_out = None
         if self.memory_tokens > 0:
-            mem_out = z[:, :self.memory_tokens, :]
+            M_out = z[:, :self.memory_tokens, :]
             z = z[:, self.memory_tokens:, :]
             lens_z_new = lens_z_new - self.memory_tokens
 
@@ -222,7 +259,8 @@ class VisionTransformerCE(VisionTransformer):
         aux_dict = {
             "attn": attn,
             "removed_indexes_s": removed_indexes_s,  # used for visualization
-            "memory_tokens": mem_out,
+            "memory_tokens": M_out,
+            "memory_tokens_layers": M_layers_out,
         }
 
         return x, aux_dict
@@ -230,10 +268,11 @@ class VisionTransformerCE(VisionTransformer):
     def forward(self, z, x, ce_template_mask=None, ce_keep_rate=None,
                 tnc_keep_rate=None,
                 return_last_attn=False,
-                mem_tokens=None):
+                mem_tokens=None,
+                is_first_frame=False):
 
         x, aux_dict = self.forward_features(z, x, ce_template_mask=ce_template_mask, ce_keep_rate=ce_keep_rate,
-                                            mem_tokens=mem_tokens, )
+                                            mem_tokens=mem_tokens, is_first_frame=is_first_frame)
 
         return x, aux_dict
 
