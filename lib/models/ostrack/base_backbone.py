@@ -38,7 +38,8 @@ class BaseBackbone(nn.Module):
         self.memory_tokens = 0
         self.mem_token_embed = None
         self.read_mem_embed = None
-        self.mem_grus = None
+        self.mem_grus_time = None
+        self.mem_grus_depth = None
         self.mem_norms = None
 
     def finetune_track(self, cfg, patch_start_index=1):
@@ -125,7 +126,10 @@ class BaseBackbone(nn.Module):
             trunc_normal_(self.read_mem_embed, std=.02)
             num_layers = self._num_backbone_blocks()
             print('[DEBUG], num_layers', num_layers)
-            self.mem_grus = nn.ModuleList([
+            self.mem_grus_time = nn.ModuleList([
+                nn.GRUCell(self.embed_dim, self.embed_dim) for _ in range(num_layers)
+            ])
+            self.mem_grus_depth = nn.ModuleList([
                 nn.GRUCell(self.embed_dim, self.embed_dim) for _ in range(num_layers)
             ])
             self.mem_norms = nn.ModuleList([
@@ -134,7 +138,8 @@ class BaseBackbone(nn.Module):
         else:
             self.mem_token_embed = None
             self.read_mem_embed = None
-            self.mem_grus = None
+            self.mem_grus_time = None
+            self.mem_grus_depth = None
             self.mem_norms = None
 
     def _init_memory(self, batch_size, device=None, dtype=None):
@@ -177,21 +182,29 @@ class BaseBackbone(nn.Module):
             )
         return mem_tokens
 
-    def _update_memory_with_gru(self, layer_idx, M_prev_time, M_hat):
-        if self.mem_grus is None or layer_idx >= len(self.mem_grus):
+    def _update_memory_with_two_gru(self, layer_idx, M_prev_time, M_prev_layer, M_hat):
+        if (
+            self.mem_grus_time is None
+            or self.mem_grus_depth is None
+            or layer_idx >= len(self.mem_grus_time)
+            or layer_idx >= len(self.mem_grus_depth)
+        ):
             return M_hat
 
-        if M_prev_time.shape != M_hat.shape:
+        if M_prev_time.shape != M_hat.shape or M_prev_layer.shape != M_hat.shape:
             raise ValueError(
-                f"M_prev_time and M_hat must have same shape, "
-                f"got {tuple(M_prev_time.shape)} and {tuple(M_hat.shape)}"
+                "M_prev_time, M_prev_layer, and M_hat must have same shape, "
+                f"got {tuple(M_prev_time.shape)}, {tuple(M_prev_layer.shape)}, and {tuple(M_hat.shape)}"
             )
 
         B, K, C = M_prev_time.shape
-        h_prev = M_prev_time.reshape(B * K, C)  # M_{t-1,l}
-        x_in = M_hat.reshape(B * K, C) # M_hat_{t,l}
-        h_new = self.mem_grus[layer_idx](x_in, h_prev)
-        M_current = h_new.reshape(B, K, C)      # M_{t,l}
+        h_time_prev = M_prev_time.reshape(B * K, C)      # M_{t-1,l}
+        x_time_in = M_hat.reshape(B * K, C)              # M_hat_{t,l}
+        h_time = self.mem_grus_time[layer_idx](x_time_in, h_time_prev)  # T_{t,l}
+
+        h_depth_prev = M_prev_layer.reshape(B * K, C)    # M_{t,l-1}
+        h_depth = self.mem_grus_depth[layer_idx](h_time, h_depth_prev)  # M_{t,l}
+        M_current = h_depth.reshape(B, K, C)
         if self.mem_norms is not None and layer_idx < len(self.mem_norms):
             M_current = self.mem_norms[layer_idx](M_current)
 
@@ -244,7 +257,7 @@ class BaseBackbone(nn.Module):
 
                 if use_gru:
                     M_prev_time = M_prev_layers[l]
-                    M_current = self._update_memory_with_gru(l, M_prev_time, M_hat)
+                    M_current = self._update_memory_with_two_gru(l, M_prev_time, M_prev_layer, M_hat)
                 else:
                     M_current = M_hat
                     if self.mem_norms is not None and l < len(self.mem_norms):

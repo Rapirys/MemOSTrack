@@ -203,7 +203,7 @@ class VisionTransformerCE(VisionTransformer):
                 visual_tokens = x[:, self.memory_tokens:, :]
                 if use_gru:
                     M_prev_time = M_prev_layers[l]
-                    M_current = self._update_memory_with_gru(l, M_prev_time, M_hat)
+                    M_current = self._update_memory_with_two_gru(l, M_prev_time, M_prev_layer, M_hat)
                 else:
                     M_current = M_hat
                     if self.mem_norms is not None and l < len(self.mem_norms):
