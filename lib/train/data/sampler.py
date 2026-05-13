@@ -90,6 +90,18 @@ class TrackingSampler(torch.utils.data.Dataset):
         windows = ok.unfold(0, total_required, 1)
         return torch.nonzero(windows.all(dim=1), as_tuple=False).flatten().tolist()
 
+    @staticmethod
+    def _sample_increasing_valid_ids(visible, valid, total_required):
+        vis = visible.to(torch.bool)
+        val = valid.to(torch.bool) if valid is not None else vis
+        ok = vis & val
+        valid_ids = torch.nonzero(ok, as_tuple=False).flatten().tolist()
+        if len(valid_ids) < total_required:
+            return None
+        sampled = random.sample(valid_ids, total_required)
+        sampled.sort()
+        return sampled
+
     def _sample_visible_ids(self, visible, num_ids=1, min_id=None, max_id=None,
                             allow_invisible=False, force_invisible=False):
         """ Samples num_ids frames between min_id and max_id for which target is visible
@@ -195,19 +207,16 @@ class TrackingSampler(torch.utils.data.Dataset):
                         continue
                         ##TODO: Check recent sampler changes that skip invalid frames.
                     seq_valid = seq_info_dict.get('valid', visible)
-                    candidate_starts = self._consecutive_valid_starts(visible, seq_valid, total_required)
-                    if len(candidate_starts) == 0:
+                    sampled_ids = self._sample_increasing_valid_ids(visible, seq_valid, total_required)
+                    if sampled_ids is None:
                         self._log_skip(
-                            "no visible+valid consecutive window of length {} in seq_id={}.".format(
+                            "not enough visible+valid frames to sample {} ordered ids in seq_id={}.".format(
                                 total_required, seq_id
                             )
                         )
                         continue
-                    # TODO: This is "consecutive indices" in [0..len(visible)-1], not necessarily consecutive actual video frames.
-                    start_id = random.choice(candidate_starts)
-                    template_frame_ids = list(range(start_id, start_id + self.num_template_frames))
-                    search_frame_ids = list(range(start_id + self.num_template_frames,
-                                                  start_id + total_required))
+                    template_frame_ids = sampled_ids[:self.num_template_frames]
+                    search_frame_ids = sampled_ids[self.num_template_frames:]
 
                 elif self.frame_sample_mode == "trident" or self.frame_sample_mode == "trident_pro":
                     template_frame_ids, search_frame_ids = self.get_frame_ids_trident(visible)
@@ -376,7 +385,10 @@ class TrackingSampler(torch.utils.data.Dataset):
 
             if self.frame_sample_mode == "causal_consecutive":
                 total_required = self.num_search_frames + self.num_template_frames
-                enough_visible_frames = len(visible) >= total_required
+                seq_valid = seq_info_dict.get('valid', visible)
+                vis = visible.to(torch.bool)
+                val = seq_valid.to(torch.bool) if seq_valid is not None else vis
+                enough_visible_frames = int((vis & val).sum().item()) >= total_required
             else:
                 enough_visible_frames = visible.type(torch.int64).sum().item() > 2 * (
                         self.num_search_frames + self.num_template_frames) and len(visible) >= 20
