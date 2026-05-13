@@ -55,7 +55,7 @@ class TrackingSampler(torch.utils.data.Dataset):
         self.processing = processing
         self.frame_sample_mode = frame_sample_mode
         self.log_skips = True
-        self.skip_log_every = 200
+        self.skip_log_every = 10
         self.max_seq_sampling_attempts = 200
         self._skip_count = 0
         self._skip_log_lines = 0
@@ -91,14 +91,30 @@ class TrackingSampler(torch.utils.data.Dataset):
         return torch.nonzero(windows.all(dim=1), as_tuple=False).flatten().tolist()
 
     @staticmethod
-    def _sample_increasing_valid_ids(visible, valid, total_required):
+    def _sample_increasing_valid_ids(visible, valid, total_required, max_frame_span=None):
         vis = visible.to(torch.bool)
         val = valid.to(torch.bool) if valid is not None else vis
         ok = vis & val
         valid_ids = torch.nonzero(ok, as_tuple=False).flatten().tolist()
         if len(valid_ids) < total_required:
             return None
-        sampled = random.sample(valid_ids, total_required)
+        if max_frame_span is None:
+            sampled = random.sample(valid_ids, total_required)
+            sampled.sort()
+            return sampled
+
+        # Keep sampled ids temporally coherent by requiring a bounded frame span.
+        candidate_ranges = []
+        left = 0
+        for right in range(len(valid_ids)):
+            while left <= right and (valid_ids[right] - valid_ids[left]) > max_frame_span:
+                left += 1
+            if right - left + 1 >= total_required:
+                candidate_ranges.append((left, right))
+        if not candidate_ranges:
+            return None
+        range_left, range_right = random.choice(candidate_ranges)
+        sampled = random.sample(valid_ids[range_left:range_right + 1], total_required)
         sampled.sort()
         return sampled
 
@@ -207,11 +223,13 @@ class TrackingSampler(torch.utils.data.Dataset):
                         continue
                         ##TODO: Check recent sampler changes that skip invalid frames.
                     seq_valid = seq_info_dict.get('valid', visible)
-                    sampled_ids = self._sample_increasing_valid_ids(visible, seq_valid, total_required)
+                    sampled_ids = self._sample_increasing_valid_ids(
+                        visible, seq_valid, total_required, max_frame_span=self.max_gap
+                    )
                     if sampled_ids is None:
                         self._log_skip(
-                            "not enough visible+valid frames to sample {} ordered ids in seq_id={}.".format(
-                                total_required, seq_id
+                            "cannot sample {} ordered ids within span {} from visible+valid frames in seq_id={}.".format(
+                                total_required, self.max_gap, seq_id
                             )
                         )
                         continue
@@ -388,7 +406,11 @@ class TrackingSampler(torch.utils.data.Dataset):
                 seq_valid = seq_info_dict.get('valid', visible)
                 vis = visible.to(torch.bool)
                 val = seq_valid.to(torch.bool) if seq_valid is not None else vis
-                enough_visible_frames = int((vis & val).sum().item()) >= total_required
+                enough_visible_frames = (
+                    self._sample_increasing_valid_ids(
+                        vis, val, total_required, max_frame_span=self.max_gap
+                    ) is not None
+                )
             else:
                 enough_visible_frames = visible.type(torch.int64).sum().item() > 2 * (
                         self.num_search_frames + self.num_template_frames) and len(visible) >= 20
