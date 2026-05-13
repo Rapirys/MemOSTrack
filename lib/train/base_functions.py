@@ -46,7 +46,8 @@ def names2datasets(name_list: list, settings, image_loader):
         if name == "GOT10K_train_full":
             if settings.use_lmdb:
                 print("Building got10k_train_full from lmdb")
-                datasets.append(Got10k_lmdb(settings.env.got10k_lmdb_dir, split='train_full', image_loader=image_loader))
+                datasets.append(
+                    Got10k_lmdb(settings.env.got10k_lmdb_dir, split='train_full', image_loader=image_loader))
             else:
                 datasets.append(Got10k(settings.env.got10k_dir, split='train_full', image_loader=image_loader))
         if name == "GOT10K_votval":
@@ -122,12 +123,13 @@ def build_dataloaders(cfg, settings):
     sampler_mode = getattr(cfg.DATA, "SAMPLER_MODE", "causal")
     train_cls = getattr(cfg.TRAIN, "TRAIN_CLS", False)
     print("sampler_mode", sampler_mode)
-    dataset_train = sampler.TrackingSampler(datasets=names2datasets(cfg.DATA.TRAIN.DATASETS_NAME, settings, opencv_loader),
-                                            p_datasets=cfg.DATA.TRAIN.DATASETS_RATIO,
-                                            samples_per_epoch=cfg.DATA.TRAIN.SAMPLE_PER_EPOCH,
-                                            max_gap=cfg.DATA.MAX_SAMPLE_INTERVAL, num_search_frames=settings.num_search,
-                                            num_template_frames=settings.num_template, processing=data_processing_train,
-                                            frame_sample_mode=sampler_mode, train_cls=train_cls)
+    dataset_train = sampler.TrackingSampler(
+        datasets=names2datasets(cfg.DATA.TRAIN.DATASETS_NAME, settings, opencv_loader),
+        p_datasets=cfg.DATA.TRAIN.DATASETS_RATIO,
+        samples_per_epoch=cfg.DATA.TRAIN.SAMPLE_PER_EPOCH,
+        max_gap=cfg.DATA.MAX_SAMPLE_INTERVAL, num_search_frames=settings.num_search,
+        num_template_frames=settings.num_template, processing=data_processing_train,
+        frame_sample_mode=sampler_mode, train_cls=train_cls)
 
     train_sampler = DistributedSampler(dataset_train) if settings.local_rank != -1 else None
     shuffle = False if settings.local_rank != -1 else True
@@ -151,6 +153,12 @@ def build_dataloaders(cfg, settings):
 
 
 def get_optimizer_scheduler(net, cfg):
+    def is_memory_backbone_param(param_name: str) -> bool:
+        return (
+                param_name.startswith("backbone.mem_")
+                or param_name.startswith("backbone.read_mem_embed")
+        )
+
     train_cls = getattr(cfg.TRAIN, "TRAIN_CLS", False)
     if train_cls:
         print("Only training classification head. Learnable parameters are shown below.")
@@ -164,13 +172,30 @@ def get_optimizer_scheduler(net, cfg):
             else:
                 print(n)
     else:
-        param_dicts = [
-            {"params": [p for n, p in net.named_parameters() if "backbone" not in n and p.requires_grad]},
-            {
-                "params": [p for n, p in net.named_parameters() if "backbone" in n and p.requires_grad],
+        memory_multiplier = float(getattr(cfg.TRAIN, "MEMORY_MULTIPLIER", 1.0))
+        base_params = []
+        memory_params = []
+        backbone_params = []
+        for n, p in net.named_parameters():
+            if not p.requires_grad:
+                continue
+            if is_memory_backbone_param(n):
+                memory_params.append(p)
+            elif "backbone" in n:
+                backbone_params.append(p)
+            else:
+                base_params.append(p)
+
+        param_dicts = []
+        if base_params:
+            param_dicts.append({"params": base_params})
+        if memory_params:
+            param_dicts.append({"params": memory_params, "lr": cfg.TRAIN.LR * memory_multiplier})
+        if backbone_params:
+            param_dicts.append({
+                "params": backbone_params,
                 "lr": cfg.TRAIN.LR * cfg.TRAIN.BACKBONE_MULTIPLIER,
-            },
-        ]
+            })
         if is_main_process():
             print("Learnable parameters are shown below.")
             for n, p in net.named_parameters():
