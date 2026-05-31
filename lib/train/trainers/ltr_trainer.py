@@ -137,13 +137,19 @@ class LTRTrainer(BaseTrainer):
                 if not self.use_amp:
                     loss.backward()
                     if self.settings.grad_clip_norm > 0:
-                        torch.nn.utils.clip_grad_norm_(self.actor.net.parameters(), self.settings.grad_clip_norm)
+                        grad_norm = torch.nn.utils.clip_grad_norm_(self.actor.net.parameters(), self.settings.grad_clip_norm)
+                        grad_norm_value = float(grad_norm.detach().cpu().item()) if torch.is_tensor(grad_norm) else float(grad_norm)
+                        stats["Grad/global_norm"] = grad_norm_value
+                        stats["Grad/clip_ratio"] = min(1.0, self.settings.grad_clip_norm / (grad_norm_value + 1e-12))
                     self.optimizer.step()
                 else:
                     self.scaler.scale(loss).backward()
                     if self.settings.grad_clip_norm > 0:
                         self.scaler.unscale_(self.optimizer)
-                        torch.nn.utils.clip_grad_norm_(self.actor.net.parameters(), self.settings.grad_clip_norm)
+                        grad_norm = torch.nn.utils.clip_grad_norm_(self.actor.net.parameters(), self.settings.grad_clip_norm)
+                        grad_norm_value = float(grad_norm.detach().cpu().item()) if torch.is_tensor(grad_norm) else float(grad_norm)
+                        stats["Grad/global_norm"] = grad_norm_value
+                        stats["Grad/clip_ratio"] = min(1.0, self.settings.grad_clip_norm / (grad_norm_value + 1e-12))
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
             else:
