@@ -5,11 +5,10 @@ from .memory_filter_loss import (
 )
 from lib.utils.misc import NestedTensor
 from lib.utils.box_ops import box_cxcywh_to_xyxy, box_xywh_to_xyxy
+from lib.utils.template_corruption import MemoryTemplateCorruption
 import torch
-import torch.nn.functional as F
 import os
 import cv2
-import warnings
 from lib.utils.merge import merge_template_search
 from ...utils.heapmap_utils import generate_heatmap
 from ...utils.ce_utils import generate_mask_cond, adjust_keep_rate
@@ -35,7 +34,13 @@ class OSTrackActor(BaseActor):
         self.memory_loss_weight = float(self.loss_weight.get('memory', 0.0))
         memory_loss_cfg = str(getattr(self.cfg.TRAIN, "MEMORY_LOSS_TYPE", "none")).strip().lower()
         self.memory_loss_fn, self.memory_loss_name = self._build_memory_loss(memory_loss_cfg)
-        self._init_memory_blur()
+        train_cfg = getattr(self.cfg, "TRAIN", None)
+        self.memory_template_corruption = MemoryTemplateCorruption.from_train_cfg(train_cfg)
+        cfg_num_search = int(getattr(self.cfg.DATA.SEARCH, "NUMBER", 0))
+        settings_num_search = int(getattr(self.settings, "num_search", cfg_num_search))
+        effective_num_search = settings_num_search if settings_num_search > 0 else cfg_num_search
+        self.memory_template_corruption.validate_for_num_search(effective_num_search)
+        self.memory_blur_enabled = self.memory_template_corruption.enabled
         if self.memory_blur_enabled and self.memory_loss_fn is not None:
             raise ValueError(
                 "TRAIN.MEMORY_BLUR_ENABLED=True is not supported together with "
@@ -70,95 +75,6 @@ class OSTrackActor(BaseActor):
             "Unsupported TRAIN.MEMORY_LOSS_TYPE='{}'. Use one of: "
             "none, MemoryFilterLoss, DiMPSteepestDescentSolver.".format(memory_loss_cfg)
         )
-
-    def _init_memory_blur(self):
-        train_cfg = getattr(self.cfg, "TRAIN", None)
-        self.memory_blur_enabled = bool(getattr(train_cfg, "MEMORY_BLUR_ENABLED", False))
-        self.memory_blur_num_frames = int(getattr(train_cfg, "MEMORY_BLUR_NUM_FRAMES", 2))
-        self.memory_blur_kernel_size = int(getattr(train_cfg, "MEMORY_BLUR_KERNEL_SIZE", 19))
-        self.memory_blur_passes = int(getattr(train_cfg, "MEMORY_BLUR_PASSES", 2))
-        self.memory_blur_skip_first = 2
-        self.memory_blur_min_num_search = self.memory_blur_num_frames * 2 + self.memory_blur_skip_first
-
-        if not self.memory_blur_enabled:
-            return
-
-        if self.memory_blur_num_frames <= 0:
-            raise ValueError("TRAIN.MEMORY_BLUR_NUM_FRAMES must be > 0 when memory blur is enabled.")
-        if self.memory_blur_kernel_size <= 1 or self.memory_blur_kernel_size % 2 == 0:
-            raise ValueError(
-                "TRAIN.MEMORY_BLUR_KERNEL_SIZE must be an odd integer > 1. "
-                "Got {}.".format(self.memory_blur_kernel_size)
-            )
-        if self.memory_blur_passes <= 0:
-            raise ValueError("TRAIN.MEMORY_BLUR_PASSES must be > 0 when memory blur is enabled.")
-
-        cfg_num_search = int(getattr(self.cfg.DATA.SEARCH, "NUMBER", 0))
-        settings_num_search = int(getattr(self.settings, "num_search", cfg_num_search))
-        effective_num_search = settings_num_search if settings_num_search > 0 else cfg_num_search
-        if effective_num_search < self.memory_blur_min_num_search:
-            raise ValueError(
-                "Memory blur requires number of search frames > k*2+2. "
-                "Got DATA.SEARCH.NUMBER={}, k={}, threshold={}.".format(
-                    effective_num_search,
-                    self.memory_blur_num_frames,
-                    self.memory_blur_min_num_search,
-                )
-            )
-
-    def _select_blur_frame_indices(self, num_search):
-        if not self.memory_blur_enabled:
-            return set()
-
-        if num_search < self.memory_blur_min_num_search:
-            warnings.warn(
-                "Received short sequence with {} search frames while memory blur needs at least {} "
-                "(k={}, formula k*2+2). Skipping blur for this sample.".format(
-                    num_search,
-                    self.memory_blur_min_num_search,
-                    self.memory_blur_num_frames,
-                )
-            )
-            return set()
-
-        candidates = torch.arange(self.memory_blur_skip_first, num_search, dtype=torch.long)
-        if candidates.numel() < self.memory_blur_num_frames:
-            warnings.warn(
-                "Insufficient blur candidates ({} available, need {}). Skipping blur for this sample.".format(
-                    candidates.numel(),
-                    self.memory_blur_num_frames,
-                )
-            )
-            return set()
-
-        rand_idx = torch.randperm(candidates.numel())[:self.memory_blur_num_frames]
-        selected = candidates[rand_idx].tolist()
-        return set(int(i) for i in selected)
-
-    def _build_blur_mask(self, num_search, batch_size, device):
-        blur_mask = torch.zeros((num_search, batch_size), dtype=torch.bool, device=device)
-        if not self.memory_blur_enabled:
-            return blur_mask
-
-        for b in range(batch_size):
-            frame_indices = self._select_blur_frame_indices(num_search)
-            if not frame_indices:
-                continue
-            idx_tensor = torch.tensor(sorted(frame_indices), dtype=torch.long, device=device)
-            blur_mask[idx_tensor, b] = True
-        return blur_mask
-
-    def _apply_memory_blur(self, search_img):
-        blurred = search_img
-        for _ in range(self.memory_blur_passes):
-            blurred = F.avg_pool2d(
-                blurred,
-                kernel_size=self.memory_blur_kernel_size,
-                stride=1,
-                padding=self.memory_blur_kernel_size // 2,
-                count_include_pad=False,
-            )
-        return blurred
 
     def __call__(self, data):
         """
@@ -225,7 +141,7 @@ class OSTrackActor(BaseActor):
         mem_cfg = getattr(self.cfg.MODEL, "MEMORY", None)
         max_bptt_steps = int(getattr(mem_cfg, "BPTT_STEPS", -1)) if mem_cfg is not None else -1
 
-        blur_mask = self._build_blur_mask(num_search, batch_size, search_images.device)
+        blur_mask = self.memory_template_corruption.build_mask(num_search, batch_size, search_images.device)
         out_dict = []
         for i in range(num_search):
             if max_bptt_steps > 0 and i > 0 and mem_tokens is not None:
@@ -236,7 +152,7 @@ class OSTrackActor(BaseActor):
             template_in = template_list
             if frame_blur_mask.any():
                 blur_selector = frame_blur_mask.view(-1, 1, 1, 1)
-                blurred_template = self._apply_memory_blur(template_list)
+                blurred_template = self.memory_template_corruption.apply(template_list)
                 template_in = torch.where(blur_selector, blurred_template, template_list)
             ce_keep_rate_i = ce_keep_rate
             if frame_blur_mask.any() and self.cfg.MODEL.BACKBONE.CE_LOC:

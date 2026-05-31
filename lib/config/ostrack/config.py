@@ -50,6 +50,7 @@ cfg.TRAIN.L1_WEIGHT = 5.0
 cfg.TRAIN.MEMORY_WEIGHT = 0.001
 cfg.TRAIN.MEMORY_LOSS_TYPE = "none"  # none | MemoryFilterLoss | DiMPSteepestDescentSolver
 cfg.TRAIN.MEMORY_BLUR_ENABLED = False
+cfg.TRAIN.MEMORY_BLUR_MODE = "blur"  # blur | zero
 cfg.TRAIN.MEMORY_BLUR_NUM_FRAMES = 2
 cfg.TRAIN.MEMORY_BLUR_KERNEL_SIZE = 19
 cfg.TRAIN.MEMORY_BLUR_PASSES = 2
