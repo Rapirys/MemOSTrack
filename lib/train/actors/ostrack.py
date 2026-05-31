@@ -96,7 +96,7 @@ class OSTrackActor(BaseActor):
         cfg_num_search = int(getattr(self.cfg.DATA.SEARCH, "NUMBER", 0))
         settings_num_search = int(getattr(self.settings, "num_search", cfg_num_search))
         effective_num_search = settings_num_search if settings_num_search > 0 else cfg_num_search
-        if effective_num_search <= self.memory_blur_min_num_search:
+        if effective_num_search < self.memory_blur_min_num_search:
             raise ValueError(
                 "Memory blur requires number of search frames > k*2+2. "
                 "Got DATA.SEARCH.NUMBER={}, k={}, threshold={}.".format(
@@ -238,6 +238,9 @@ class OSTrackActor(BaseActor):
                 blur_selector = frame_blur_mask.view(-1, 1, 1, 1)
                 blurred_template = self._apply_memory_blur(template_list)
                 template_in = torch.where(blur_selector, blurred_template, template_list)
+            ce_keep_rate_i = ce_keep_rate
+            if frame_blur_mask.any() and self.cfg.MODEL.BACKBONE.CE_LOC:
+                ce_keep_rate_i = 1.0
             if self.debug_save_seq:
                 dbg_img = search_img[0].detach().cpu().permute(1, 2, 0).clamp(0, 1)
                 dbg_img = (dbg_img * 255).byte().numpy()
@@ -247,7 +250,7 @@ class OSTrackActor(BaseActor):
             out_i = self.net(template=template_in,
                              search=search_img,
                              ce_template_mask=box_mask_z,
-                             ce_keep_rate=ce_keep_rate,
+                             ce_keep_rate=ce_keep_rate_i,
                              return_last_attn=False,
                              mem_tokens=mem_tokens,
                              is_first_frame=is_first_frame)
