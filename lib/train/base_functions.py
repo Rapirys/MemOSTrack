@@ -84,43 +84,44 @@ def names2datasets(name_list: list, settings, image_loader):
 
 
 def build_dataloaders(cfg, settings):
-    # Data transform
-    transform_joint = tfm.Transform(tfm.ToGrayscale(probability=0.05),
-                                    tfm.RandomHorizontalFlip(probability=0.5))
-
-    transform_train = tfm.Transform(tfm.ToTensorAndJitter(0.2),
-                                    tfm.RandomHorizontalFlip_Norm(probability=0.5),
-                                    tfm.Normalize(mean=cfg.DATA.MEAN, std=cfg.DATA.STD))
-
-    transform_val = tfm.Transform(tfm.ToTensor(),
-                                  tfm.Normalize(mean=cfg.DATA.MEAN, std=cfg.DATA.STD))
+    sampler_mode = getattr(cfg.DATA, "SAMPLER_MODE", "causal")
+    # Data transform (single inference-like path)
+    transform_joint = tfm.Transform(
+        tfm.ToGrayscale(probability=0.05),
+        tfm.RandomHorizontalFlip(probability=0.5)
+    )
+    transform_train = tfm.Transform(
+        tfm.ToTensorAndJitter(0.2),
+    )
+    transform_val = tfm.Transform(
+        tfm.ToTensor(),
+    )
 
     # The tracking pairs processing module
     output_sz = settings.output_sz
     search_area_factor = settings.search_area_factor
 
-    data_processing_train = processing.STARKProcessing(search_area_factor=search_area_factor,
-                                                       output_sz=output_sz,
-                                                       center_jitter_factor=settings.center_jitter_factor,
-                                                       scale_jitter_factor=settings.scale_jitter_factor,
-                                                       mode='sequence',
-                                                       transform=transform_train,
-                                                       joint_transform=transform_joint,
-                                                       settings=settings)
+    data_processing_train = processing.InferenceLikeSequenceProcessing(search_area_factor=search_area_factor,
+                                                                       output_sz=output_sz,
+                                                                       center_jitter_factor=settings.center_jitter_factor,
+                                                                       scale_jitter_factor=settings.scale_jitter_factor,
+                                                                       mode='sequence',
+                                                                       transform=transform_train,
+                                                                       joint_transform=transform_joint,
+                                                                       settings=settings)
 
-    data_processing_val = processing.STARKProcessing(search_area_factor=search_area_factor,
-                                                     output_sz=output_sz,
-                                                     center_jitter_factor=settings.center_jitter_factor,
-                                                     scale_jitter_factor=settings.scale_jitter_factor,
-                                                     mode='sequence',
-                                                     transform=transform_val,
-                                                     joint_transform=transform_joint,
-                                                     settings=settings)
+    data_processing_val = processing.InferenceLikeSequenceProcessing(search_area_factor=search_area_factor,
+                                                                     output_sz=output_sz,
+                                                                     center_jitter_factor=settings.center_jitter_factor,
+                                                                     scale_jitter_factor=settings.scale_jitter_factor,
+                                                                     mode='sequence',
+                                                                     transform=transform_val,
+                                                                     joint_transform=transform_joint,
+                                                                     settings=settings)
 
     # Train sampler and loader
     settings.num_template = getattr(cfg.DATA.TEMPLATE, "NUMBER", 1)
     settings.num_search = getattr(cfg.DATA.SEARCH, "NUMBER", 1)
-    sampler_mode = getattr(cfg.DATA, "SAMPLER_MODE", "causal")
     train_cls = getattr(cfg.TRAIN, "TRAIN_CLS", False)
     print("sampler_mode", sampler_mode)
     dataset_train = sampler.TrackingSampler(

@@ -98,25 +98,22 @@ class TrackingSampler(torch.utils.data.Dataset):
         valid_ids = torch.nonzero(ok, as_tuple=False).flatten().tolist()
         if len(valid_ids) < total_required:
             return None
-        if max_frame_span is None:
-            sampled = random.sample(valid_ids, total_required)
-            sampled.sort()
-            return sampled
+        # Sample a contiguous block in valid-id order. This skips only invalid frames.
+        num_valid = len(valid_ids)
+        candidate_starts = []
+        max_start = num_valid - total_required
+        for start in range(max_start + 1):
+            end = start + total_required - 1
+            if max_frame_span is not None and (valid_ids[end] - valid_ids[start]) > max_frame_span:
+                continue
+            candidate_starts.append(start)
 
-        # Keep sampled ids temporally coherent by requiring a bounded frame span.
-        candidate_ranges = []
-        left = 0
-        for right in range(len(valid_ids)):
-            while left <= right and (valid_ids[right] - valid_ids[left]) > max_frame_span:
-                left += 1
-            if right - left + 1 >= total_required:
-                candidate_ranges.append((left, right))
-        if not candidate_ranges:
+        if not candidate_starts:
             return None
-        range_left, range_right = random.choice(candidate_ranges)
-        sampled = random.sample(valid_ids[range_left:range_right + 1], total_required)
-        sampled.sort()
-        return sampled
+
+        start = random.choice(candidate_starts)
+        end = start + total_required
+        return valid_ids[start:end]
 
     def _sample_visible_ids(self, visible, num_ids=1, min_id=None, max_id=None,
                             allow_invisible=False, force_invisible=False):

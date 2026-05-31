@@ -1,8 +1,9 @@
 import torch
 import torchvision.transforms as transforms
 from lib.utils import TensorDict
-import lib.train.data.processing_utils as prutils
 import torch.nn.functional as F
+import numpy as np
+import cv2 as cv
 
 
 def stack_tensors(x):
@@ -35,14 +36,11 @@ class BaseProcessing:
         raise NotImplementedError
 
 
-class STARKProcessing(BaseProcessing):
-    """ The processing class used for training LittleBoy. The images are processed in the following way.
-    First, the target bounding box is jittered by adding some noise. Next, a square region (called search region )
-    centered at the jittered target center, and of area search_area_factor^2 times the area of the jittered box is
-    cropped from the image. The reason for jittering the target box is to avoid learning the bias that the target is
-    always at the center of the search region. The search region is then resized to a fixed size given by the
-    argument output_sz.
+class InferenceLikeSequenceProcessing(BaseProcessing):
+    """Inference-like processing path.
 
+    Keeps full sequence frames, resizes them to a fixed canvas, applies augmentations, and keeps annotations
+    in absolute image coordinates on that canvas. Search/template crops are deferred to actor rollout.
     """
 
     def __init__(self, search_area_factor, output_sz, center_jitter_factor, scale_jitter_factor,
@@ -67,27 +65,63 @@ class STARKProcessing(BaseProcessing):
         self.settings = settings
         self.search_per_frame_jitter = bool(getattr(settings, "search_per_frame_jitter", False))
 
-    def _get_jittered_box(self, box, mode, jitter_params=None):
-        """ Jitter the input box
-        args:
-            box - input bounding box
-            mode - string 'template' or 'search' indicating template or search data
-            jitter_params - optional tuple of (scale_noise, center_noise), each tensor shape (2,)
+        self.canvas_size = int(output_sz['search'])
 
-        returns:
-            torch.Tensor - jittered box
-        """
-        if jitter_params is None:
-            scale_noise = torch.randn(2)
-            center_noise = torch.rand(2) - 0.5
+    def _resize_frame_bbox_mask(self, image, bbox, mask):
+        if image is None or bbox is None:
+            return None, bbox, mask
+
+        h, w = image.shape[:2]
+        if h <= 0 or w <= 0:
+            raise ValueError("invalid frame size: {}x{}".format(h, w))
+
+        out_h = self.canvas_size
+        out_w = self.canvas_size
+        resized = cv.resize(image, (out_w, out_h), interpolation=cv.INTER_LINEAR)
+
+        if torch.is_tensor(bbox):
+            bbox_out = bbox.clone().float()
         else:
-            scale_noise, center_noise = jitter_params
+            bbox_out = torch.tensor(bbox, dtype=torch.float32)
 
-        jittered_size = box[2:4] * torch.exp(scale_noise * self.scale_jitter_factor[mode])
-        max_offset = (jittered_size.prod().sqrt() * torch.tensor(self.center_jitter_factor[mode]).float())
-        jittered_center = box[0:2] + 0.5 * box[2:4] + max_offset * center_noise
+        scale_x = float(out_w) / float(w)
+        scale_y = float(out_h) / float(h)
+        bbox_out[0] = bbox_out[0] * scale_x
+        bbox_out[1] = bbox_out[1] * scale_y
+        bbox_out[2] = bbox_out[2] * scale_x
+        bbox_out[3] = bbox_out[3] * scale_y
 
-        return torch.cat((jittered_center - 0.5 * jittered_size, jittered_size), dim=0)
+        if mask is None:
+            mask_out = None
+        elif torch.is_tensor(mask):
+            mask_np = mask.detach().cpu().numpy().astype(np.uint8)
+            mask_resized = cv.resize(mask_np, (out_w, out_h), interpolation=cv.INTER_NEAREST)
+            mask_out = torch.from_numpy(mask_resized).to(mask.device, dtype=mask.dtype)
+        else:
+            mask_out = cv.resize(mask.astype(np.uint8), (out_w, out_h), interpolation=cv.INTER_NEAREST)
+
+        return resized, bbox_out, mask_out
+
+    def _resize_triplet(self, images, annos, masks):
+        out_images, out_annos, out_masks = [], [], []
+        for img, box, m in zip(images, annos, masks):
+            img_out, box_out, mask_out = self._resize_frame_bbox_mask(img, box, m)
+            out_images.append(img_out)
+            out_annos.append(box_out)
+            out_masks.append(mask_out)
+        return out_images, out_annos, out_masks
+
+    @staticmethod
+    def _stack_masks(mask_list, size):
+        out = []
+        for m in mask_list:
+            if m is None:
+                out.append(torch.zeros((size, size), dtype=torch.float32))
+            elif torch.is_tensor(m):
+                out.append(m.float())
+            else:
+                out.append(torch.from_numpy(m).float())
+        return out
 
     def __call__(self, data: TensorDict):
         """
@@ -105,45 +139,37 @@ class STARKProcessing(BaseProcessing):
             data['search_images'], data['search_anno'], data['search_masks'] = self.transform['joint'](
                 image=data['search_images'], bbox=data['search_anno'], mask=data['search_masks'], new_roll=False)
 
+        data['template_images'], data['template_anno'], data['template_masks'] = self._resize_triplet(
+            data['template_images'], data['template_anno'], data['template_masks'])
+        data['search_images'], data['search_anno'], data['search_masks'] = self._resize_triplet(
+            data['search_images'], data['search_anno'], data['search_masks'])
+
         for s in ['template', 'search']:
             assert self.mode == 'sequence' or len(data[s + '_images']) == 1, \
                 "In pair mode, num train/test frames must be 1"
 
-            # Add a uniform noise to the center pos
-            use_shared_jitter = (
-                self.mode == 'sequence'
-                and len(data[s + '_anno']) > 1
-                and not (s == 'search' and self.search_per_frame_jitter)
-            )
-            if use_shared_jitter:
-                shared_jitter = (torch.randn(2), torch.rand(2) - 0.5)
-                jittered_anno = [self._get_jittered_box(a, s, jitter_params=shared_jitter)
-                                 for a in data[s + '_anno']]
-            else:
-                jittered_anno = [self._get_jittered_box(a, s) for a in data[s + '_anno']]
-
-            # 2021.1.9 Check whether data is valid. Avoid too small bounding boxes
-            w, h = torch.stack(jittered_anno, dim=0)[:, 2], torch.stack(jittered_anno, dim=0)[:, 3]
-
-            crop_sz = torch.ceil(torch.sqrt(w * h) * self.search_area_factor[s])
-            if (crop_sz < 1).any():
-                data['valid'] = False
-                data['invalid_reason'] = "{} crop too small after jitter".format(s)
-                # print("Too small box is found. Replace it with new data.")
-                return data
-
-            # Crop image region centered at jittered_anno box and get the attention mask
-            crops, boxes, att_mask, mask_crops = prutils.jittered_center_crop(data[s + '_images'], jittered_anno,
-                                                                              data[s + '_anno'], self.search_area_factor[s],
-                                                                              self.output_sz[s], masks=data[s + '_masks'])
             # Apply transforms
-            num_frames = len(crops)
+            num_frames = len(data[s + '_images'])
             if num_frames > 1:
                 new_roll = [True] + [False] * (num_frames - 1)
             else:
                 new_roll = True
+
             data[s + '_images'], data[s + '_anno'], data[s + '_att'], data[s + '_masks'] = self.transform[s](
-                image=crops, bbox=boxes, att=att_mask, mask=mask_crops, joint=False, new_roll=new_roll)
+                image=data[s + '_images'],
+                bbox=data[s + '_anno'],
+                att=[np.zeros((self.canvas_size, self.canvas_size), dtype=np.bool_) for _ in range(num_frames)],
+                mask=data[s + '_masks'],
+                joint=False,
+                new_roll=new_roll
+            )
+
+            # Check whether data is valid. Avoid too small bounding boxes
+            boxes_t = torch.stack([a.float() for a in data[s + '_anno']], dim=0)
+            if (boxes_t[:, 2:] <= 1.0).any():
+                data['valid'] = False
+                data['invalid_reason'] = "{} bbox too small after augmentation".format(s)
+                return data
 
             # 2021.1.9 Check whether elements in data[s + '_att'] is all 1
             # Note that type of data[s + '_att'] is tuple, type of ele is torch.tensor
@@ -168,9 +194,22 @@ class STARKProcessing(BaseProcessing):
         data['valid'] = True
         data['invalid_reason'] = None
         # if we use copy-and-paste augmentation
-        if data["template_masks"] is None or data["search_masks"] is None:
-            data["template_masks"] = torch.zeros((1, self.output_sz["template"], self.output_sz["template"]))
-            data["search_masks"] = torch.zeros((1, self.output_sz["search"], self.output_sz["search"]))
+        if data["template_masks"] is None:
+            data["template_masks"] = [
+                torch.zeros((self.canvas_size, self.canvas_size), dtype=torch.float32)
+                for _ in range(len(data["template_images"]))
+            ]
+        else:
+            data["template_masks"] = self._stack_masks(data["template_masks"], self.canvas_size)
+
+        if data["search_masks"] is None:
+            data["search_masks"] = [
+                torch.zeros((self.canvas_size, self.canvas_size), dtype=torch.float32)
+                for _ in range(len(data["search_images"]))
+            ]
+        else:
+            data["search_masks"] = self._stack_masks(data["search_masks"], self.canvas_size)
+
         # Prepare output
         if self.mode == 'sequence':
             data = data.apply(stack_tensors)
