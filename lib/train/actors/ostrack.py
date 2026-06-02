@@ -300,7 +300,12 @@ class OSTrackActor(BaseActor):
             pred_boxes = self._select_rollout_boxes(out_i, batch_size)
             pred_box_mean = pred_boxes.mean(dim=1) * (float(search_size) / resize_factors_i_t.view(-1, 1))
             pred_state = map_search_boxes_back_to_image(pred_box_mean, crop_boxes_i, search_size, resize_factors_i_t)
-            pred_state = clip_xywh_boxes_to_image_bounds(pred_state, image_height=frame_h, image_width=frame_w, min_size=1.0)
+            pred_state = clip_xywh_boxes_to_image_bounds(
+                pred_state,
+                image_height=frame_h,
+                image_width=frame_w,
+                margin=10.0,
+            )
 
             if i < (num_search - 1):
                 teacher_mask = (torch.rand(batch_size, device=pred_state.device) < teacher_prob)
@@ -472,6 +477,7 @@ class OSTrackActor(BaseActor):
                 "Loss/memory": mem_loss.item(),
                 "Loss/memory weighted": (memory_weight * mem_loss).item(),
                 "IoU": clean_stats["iou"].item(),
+                "Rollout/crop jitter": float(self.rollout_crop_jitter and self.net.training),
                 "Rollout/valid gt samples": valid_samples,
                 "Rollout/valid gt ratio": valid_samples / max(1.0, total_samples),
                 "Blur/frames": float(len(blurred_indices)),

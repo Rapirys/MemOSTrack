@@ -67,7 +67,7 @@ class InferenceLikeSequenceProcessing(BaseProcessing):
 
         self.canvas_size = int(output_sz['search'])
 
-    def _resize_frame_bbox_mask(self, image, bbox, mask):
+    def _letterbox_frame_bbox_mask(self, image, bbox, mask):
         if image is None or bbox is None:
             return None, bbox, mask
 
@@ -77,35 +77,48 @@ class InferenceLikeSequenceProcessing(BaseProcessing):
 
         out_h = self.canvas_size
         out_w = self.canvas_size
-        resized = cv.resize(image, (out_w, out_h), interpolation=cv.INTER_LINEAR)
+        scale = min(float(out_w) / float(w), float(out_h) / float(h))
+        resized_w = max(1, int(round(float(w) * scale)))
+        resized_h = max(1, int(round(float(h) * scale)))
+        pad_left = (out_w - resized_w) // 2
+        pad_top = (out_h - resized_h) // 2
+
+        resized = cv.resize(image, (resized_w, resized_h), interpolation=cv.INTER_LINEAR)
+        if image.ndim == 2:
+            image_out = np.zeros((out_h, out_w), dtype=image.dtype)
+        else:
+            image_out = np.zeros((out_h, out_w, image.shape[2]), dtype=image.dtype)
+        image_out[pad_top:pad_top + resized_h, pad_left:pad_left + resized_w] = resized
 
         if torch.is_tensor(bbox):
             bbox_out = bbox.clone().float()
         else:
             bbox_out = torch.tensor(bbox, dtype=torch.float32)
 
-        scale_x = float(out_w) / float(w)
-        scale_y = float(out_h) / float(h)
-        bbox_out[0] = bbox_out[0] * scale_x
-        bbox_out[1] = bbox_out[1] * scale_y
-        bbox_out[2] = bbox_out[2] * scale_x
-        bbox_out[3] = bbox_out[3] * scale_y
+        bbox_out[0] = bbox_out[0] * scale + float(pad_left)
+        bbox_out[1] = bbox_out[1] * scale + float(pad_top)
+        bbox_out[2] = bbox_out[2] * scale
+        bbox_out[3] = bbox_out[3] * scale
 
         if mask is None:
             mask_out = None
         elif torch.is_tensor(mask):
             mask_np = mask.detach().cpu().numpy().astype(np.uint8)
-            mask_resized = cv.resize(mask_np, (out_w, out_h), interpolation=cv.INTER_NEAREST)
-            mask_out = torch.from_numpy(mask_resized).to(mask.device, dtype=mask.dtype)
+            mask_resized = cv.resize(mask_np, (resized_w, resized_h), interpolation=cv.INTER_NEAREST)
+            mask_canvas = np.zeros((out_h, out_w), dtype=mask_resized.dtype)
+            mask_canvas[pad_top:pad_top + resized_h, pad_left:pad_left + resized_w] = mask_resized
+            mask_out = torch.from_numpy(mask_canvas).to(mask.device, dtype=mask.dtype)
         else:
-            mask_out = cv.resize(mask.astype(np.uint8), (out_w, out_h), interpolation=cv.INTER_NEAREST)
+            mask_resized = cv.resize(mask.astype(np.uint8), (resized_w, resized_h), interpolation=cv.INTER_NEAREST)
+            mask_out = np.zeros((out_h, out_w), dtype=mask_resized.dtype)
+            mask_out[pad_top:pad_top + resized_h, pad_left:pad_left + resized_w] = mask_resized
 
-        return resized, bbox_out, mask_out
+        return image_out, bbox_out, mask_out
 
     def _resize_triplet(self, images, annos, masks):
         out_images, out_annos, out_masks = [], [], []
         for img, box, m in zip(images, annos, masks):
-            img_out, box_out, mask_out = self._resize_frame_bbox_mask(img, box, m)
+            img_out, box_out, mask_out = self._letterbox_frame_bbox_mask(img, box, m)
             out_images.append(img_out)
             out_annos.append(box_out)
             out_masks.append(mask_out)
