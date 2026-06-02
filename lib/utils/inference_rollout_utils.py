@@ -62,12 +62,18 @@ def _validate_batched_crop_inputs(images_bchw: torch.Tensor, target_boxes_xywh: 
         )
 
 
+def _validate_finite_boxes(target_boxes_xywh: torch.Tensor):
+    if not torch.isfinite(target_boxes_xywh).all():
+        raise ValueError("target_boxes_xywh must contain only finite values.")
+
+
 def _compute_sample_target_geometry(target_boxes_xywh: torch.Tensor,
                                     search_area_factor: float,
                                     output_sz: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     boxes = target_boxes_xywh.detach()
-    box_w = boxes[:, 2]
-    box_h = boxes[:, 3]
+    _validate_finite_boxes(boxes)
+    box_w = boxes[:, 2].clamp(min=1.0)
+    box_h = boxes[:, 3].clamp(min=1.0)
 
     crop_sz = torch.ceil(torch.sqrt(box_w * box_h) * float(search_area_factor)).clamp(min=1.0)
     resize_factors = float(output_sz) / crop_sz

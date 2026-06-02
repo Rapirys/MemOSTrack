@@ -14,6 +14,20 @@ from lib.utils.inference_rollout_utils import (
 
 
 class InferenceRolloutUtilsTest(unittest.TestCase):
+    def assert_geometry(self, boxes, search_area_factor, output_sz, expected_x1, expected_y1, expected_resize):
+        crop_x1, crop_y1, resize_factors = _compute_sample_target_geometry(
+            boxes,
+            search_area_factor=search_area_factor,
+            output_sz=output_sz,
+        )
+        expected_x1 = boxes.new_tensor(expected_x1)
+        expected_y1 = boxes.new_tensor(expected_y1)
+        expected_resize = boxes.new_tensor(expected_resize)
+
+        self.assertTrue(torch.allclose(crop_x1, expected_x1, atol=1e-6, rtol=0.0))
+        self.assertTrue(torch.allclose(crop_y1, expected_y1, atol=1e-6, rtol=0.0))
+        self.assertTrue(torch.allclose(resize_factors, expected_resize, atol=1e-6, rtol=0.0))
+
     def test_rollout_crop_matches_sample_target_geometry_without_resize_delta(self):
         image_hwc = np.arange(80 * 120 * 3, dtype=np.float32).reshape(80, 120, 3) / 255.0
         box_xywh = torch.tensor([20.0, 20.0, 20.0, 20.0], dtype=torch.float32)
@@ -44,6 +58,48 @@ class InferenceRolloutUtilsTest(unittest.TestCase):
         self.assertEqual(crops.device, image_bchw.device)
         self.assertEqual(tuple(crops.shape), (1, 3, 40, 40))
         self.assertAlmostEqual(float(resize_factors.item()), float(expected_resize), places=6)
+
+    def test_rollout_crop_handles_batched_edge_geometry(self):
+        images_bchw = torch.zeros((4, 3, 80, 120), dtype=torch.float32)
+        boxes_xywh = torch.tensor([
+            [2.0, 20.0, 10.0, 10.0],
+            [-50.0, -40.0, 10.0, 10.0],
+            [15.0, 14.2, 16.0, 9.0],
+            [10.25, 10.25, 0.2, 0.2],
+        ], dtype=torch.float32)
+
+        self.assert_geometry(
+            boxes_xywh,
+            search_area_factor=3.0,
+            output_sz=60,
+            expected_x1=[-8.0, -60.0, 5.0, 9.0],
+            expected_y1=[10.0, -50.0, 1.0, 9.0],
+            expected_resize=[2.0, 2.0, 60.0 / 36.0, 20.0],
+        )
+
+        crops, resize_factors = sample_target_crops_from_bchw_tensor(
+            images_bchw,
+            boxes_xywh,
+            search_area_factor=3.0,
+            output_sz=60,
+        )
+
+        self.assertEqual(crops.device, images_bchw.device)
+        self.assertEqual(tuple(crops.shape), (4, 3, 60, 60))
+        self.assertTrue(torch.isfinite(crops).all())
+        self.assertTrue(torch.isfinite(resize_factors).all())
+
+    def test_rollout_crop_rejects_non_finite_boxes(self):
+        images_bchw = torch.zeros((1, 3, 80, 120), dtype=torch.float32)
+        boxes_xywh = torch.tensor([[0.0, 0.0, float('nan'), 10.0]], dtype=torch.float32)
+
+        with self.assertRaises(ValueError):
+            sample_target_crops_from_bchw_tensor(
+                images_bchw,
+                boxes_xywh,
+                search_area_factor=2.0,
+                output_sz=40,
+            )
 
     def test_rollout_resize_factor_matches_sample_target(self):
         image_hwc = np.zeros((80, 120, 3), dtype=np.float32)
