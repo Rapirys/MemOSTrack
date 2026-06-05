@@ -125,7 +125,6 @@ class BaseBackbone(nn.Module):
             self.read_mem_embed = nn.Parameter(torch.zeros(1, self.memory_tokens, self.embed_dim))
             trunc_normal_(self.read_mem_embed, std=.02)
             num_layers = self._num_backbone_blocks()
-            print('[DEBUG], num_layers', num_layers)
             self.mem_grus_time = nn.ModuleList([
                 nn.GRUCell(self.embed_dim, self.embed_dim) for _ in range(num_layers)
             ])
