@@ -4,6 +4,7 @@ import shutil
 import argparse
 import _init_paths
 from lib.test.evaluation.environment import env_settings
+from lib.test.utils.checkpoint_epochs import epoch_result_name, parse_checkpoint_epochs
 
 
 def transform_got10k(tracker_name, cfg_name):
@@ -45,7 +46,16 @@ def transform_got10k(tracker_name, cfg_name):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='transform got10k results.')
     parser.add_argument('--tracker_name', type=str, help='Name of tracking method.')
-    parser.add_argument('--cfg_name', type=str, help='Name of config file.')
+    parser.add_argument('--cfg_name', type=str, help='Name of config/result folder.')
+    parser.add_argument('--checkpoint_epochs', type=str, default=None,
+                        help='Package multiple checkpoint result folders. Examples: "50,60,70" or "50-75:5".')
 
     args = parser.parse_args()
-    transform_got10k(args.tracker_name, args.cfg_name)
+    checkpoint_epochs = parse_checkpoint_epochs(args.checkpoint_epochs)
+    if checkpoint_epochs:
+        if args.cfg_name is None:
+            raise ValueError('--cfg_name is required with --checkpoint_epochs')
+        for epoch in checkpoint_epochs:
+            transform_got10k(args.tracker_name, epoch_result_name(args.cfg_name, epoch))
+    else:
+        transform_got10k(args.tracker_name, args.cfg_name)

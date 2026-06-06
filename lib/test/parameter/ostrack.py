@@ -22,7 +22,7 @@ def _should_print_test_config_once():
     return True
 
 
-def parameters(yaml_name: str):
+def parameters(yaml_name: str, checkpoint_epoch=None):
     params = TrackerParams()
     prj_dir = env_settings().prj_dir
     save_dir = env_settings().save_dir
@@ -40,8 +40,10 @@ def parameters(yaml_name: str):
     params.search_size = cfg.TEST.SEARCH_SIZE
 
     # Network checkpoint path
+    epoch = cfg.TEST.EPOCH if checkpoint_epoch is None else checkpoint_epoch
+    params.checkpoint_epoch = epoch
     params.checkpoint = os.path.join(save_dir, "checkpoints/train/ostrack/%s/OSTrack_ep%04d.pth.tar" %
-                                     (yaml_name, cfg.TEST.EPOCH))
+                                     (yaml_name, epoch))
 
     # whether to save boxes from all queries
     params.save_all_boxes = False

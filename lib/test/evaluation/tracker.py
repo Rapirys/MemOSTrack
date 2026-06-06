@@ -11,7 +11,7 @@ import numpy as np
 
 
 def trackerlist(name: str, parameter_name: str, dataset_name: str, run_ids = None, display_name: str = None,
-                result_only=False):
+                result_only=False, checkpoint_epoch=None):
     """Generate list of trackers.
     args:
         name: Name of tracking method.
@@ -21,7 +21,8 @@ def trackerlist(name: str, parameter_name: str, dataset_name: str, run_ids = Non
     """
     if run_ids is None or isinstance(run_ids, int):
         run_ids = [run_ids]
-    return [Tracker(name, parameter_name, dataset_name, run_id, display_name, result_only) for run_id in run_ids]
+    return [Tracker(name, parameter_name, dataset_name, run_id, display_name, result_only, checkpoint_epoch)
+            for run_id in run_ids]
 
 
 class Tracker:
@@ -34,7 +35,7 @@ class Tracker:
     """
 
     def __init__(self, name: str, parameter_name: str, dataset_name: str, run_id: int = None, display_name: str = None,
-                 result_only=False):
+                 result_only=False, checkpoint_epoch=None):
         assert run_id is None or isinstance(run_id, int)
 
         self.name = name
@@ -42,6 +43,7 @@ class Tracker:
         self.dataset_name = dataset_name
         self.run_id = run_id
         self.display_name = display_name
+        self.checkpoint_epoch = checkpoint_epoch
 
         env = env_settings()
         if self.run_id is None:
@@ -275,7 +277,7 @@ class Tracker:
     def get_parameters(self):
         """Get parameters."""
         param_module = importlib.import_module('lib.test.parameter.{}'.format(self.name))
-        params = param_module.parameters(self.parameter_name)
+        params = param_module.parameters(self.parameter_name, checkpoint_epoch=self.checkpoint_epoch)
         return params
 
     def _read_image(self, image_file: str):
@@ -286,6 +288,5 @@ class Tracker:
             return decode_img(image_file[0], image_file[1])
         else:
             raise ValueError("type of image_file should be str or list")
-
 
 
