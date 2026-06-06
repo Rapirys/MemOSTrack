@@ -6,7 +6,6 @@ Zagreb, June 2026
 
 # Acknowledgements
 
-
 # Table of Contents
 
 Introduction
@@ -92,24 +91,6 @@ training sampler for ordered video sequences; implementation of inference-like d
 search cropping; exploration of memory loss heads and template blurring; and
 experimental comparison with CE-enabled OSTrack baselines at 256 and 384 search
 resolutions.
-
-*Figure 0.1 - High-level idea of the thesis.*
-
-<table>
-<colgroup>
-<col style="width: 100%" />
-</colgroup>
-<thead>
-<tr class="header">
-<th><p>■</p>
-<p>OSTrack baseline -&gt; add memory tokens -&gt; add GRU update</p>
-<p>Rewrite sampler for ordered sequences -&gt; use dynamic search cropping</p>
-<p>Evaluate MemOSTrack against OSTrack-256 + CE and OSTrack-384 + CE</p></th>
-</tr>
-</thead>
-<tbody>
-</tbody>
-</table>
 
 # 1. Background and Related Work
 
@@ -258,24 +239,6 @@ introduced at different points in the tracking pipeline. The memory mechanism in
 thesis follows yet another route: it adds latent recurrent tokens directly inside the
 transformer token sequence.
 
-*Figure 1.1 - Template-search tracking formulation.*
-
-<table>
-<colgroup>
-<col style="width: 100%" />
-</colgroup>
-<thead>
-<tr class="header">
-<th><p>■</p>
-<p>Template crop z from the first frame describes the target appearance.</p>
-<p>Search crop x_t from the current frame contains the expected target location.</p>
-<p>The tracker predicts the current bounding box inside the search crop.</p></th>
-</tr>
-</thead>
-<tbody>
-</tbody>
-</table>
-
 ## 1.4 Evaluation metrics and common benchmarks
 
 The most important localization measure in this thesis is intersection over union (IoU),
@@ -366,24 +329,6 @@ information after a wrong prediction. If it is too conservative, the memory will
 adapt. The two-stage GRU used in this thesis is an attempt to update memory through
 gates rather than direct replacement.
 
-*Figure 1.2 - Why compact memory is needed.*
-
-<table>
-<colgroup>
-<col style="width: 100%" />
-</colgroup>
-<thead>
-<tr class="header">
-<th><p>■</p>
-<p>Full video-token attention grows quadratically with the number of tokens.</p>
-<p>A compact memory stream keeps only a small set of recurrent tokens.</p>
-<p>The model trades exact past-frame storage for a learned temporal summary.</p></th>
-</tr>
-</thead>
-<tbody>
-</tbody>
-</table>
-
 # 2. OSTrack Baseline
 
 ## 2.1 One-stream transformer tracking
@@ -413,79 +358,116 @@ challenge for memory research: because the baseline already has strong target-se
 interaction, a new memory pathway may be ignored unless the training setup makes
 temporal information useful.
 
-*Figure 2.1 - Simplified OSTrack baseline architecture.*
+## 2.2 ViT backbone used in this thesis
 
-<table>
-<colgroup>
-<col style="width: 100%" />
-</colgroup>
-<thead>
-<tr class="header">
-<th><p>■</p>
-<p>Template image -&gt; patch embedding -&gt; template tokens</p>
-<p>Search image -&gt; patch embedding -&gt; search tokens</p>
-<p>Template and search tokens are processed jointly by transformer layers</p>
-<p>Prediction head outputs the bounding box</p></th>
-</tr>
-</thead>
-<tbody>
-</tbody>
-</table>
+OSTrack is built on a Vision Transformer backbone. In this thesis, most architectural
+changes focus on augmenting the standard ViT-based OSTrack backbone rather than
+replacing it. ViT is a transformer-based feature extraction model for images. Instead of
+using convolutional filters, it divides an input image into fixed-size patches, converts
+each patch into a token embedding, adds positional information, and processes the
+resulting sequence with transformer encoder layers. This allows the model to learn
+visual representations through self-attention, where each image patch can interact with
+other patches in the same token sequence. ViT was introduced by Dosovitskiy et al. and
+has since become a strong alternative to convolutional backbones in many vision tasks
+\[22\].
 
-## 2.2 Baseline configuration used in this thesis
+OSTrack adapts this ViT structure to visual object tracking. The template crop and the
+search crop are both converted into patch tokens and then processed together by the same
+transformer backbone. This is important because the backbone does not only extract
+visual features; it also models the relationship between the target template and the
+current search region. In this way, OSTrack unifies feature extraction and
+template-search interaction inside one transformer stream \[13\].
 
-The main same-resolution baseline for this thesis is OSTrack-256 + CE. In this name,
-256 denotes the 256 x 256 search crop used during tracking, while CE denotes the
-candidate elimination mechanism from OSTrack. This baseline is the fairest direct
-comparison for MemOSTrack because the proposed model keeps the same search resolution,
-the same ViT-B/16 backbone family, and the same CE-enabled token-pruning mechanism, then
-adds recurrent memory tokens on top of that configuration. The higher-resolution
-OSTrack-384 + CE model is also reported later, but it should be interpreted as a
-stronger reference with a larger visual token budget rather than as the same-resolution
-baseline.
+The evaluated MemOSTrack configuration follows the OSTrack-256 + CE backbone setting.
+It uses the `vit_base_patch16_224_ce` backbone with a 128 x 128 pixel template crop and
+a 256 x 256 pixel search crop. With the ViT-B/16 patch size, these crops correspond to
+64 template tokens and 256 search tokens. The 256 search resolution, ViT-B/16 backbone
+family, and CE-enabled token-pruning mechanism make the experiment directly comparable
+to the OSTrack-256 + CE configuration reported in the original OSTrack article.
 
-The baseline input consists of a template crop and a search crop. In the evaluated
-configuration, the template crop size is 128 x 128 pixels and the search crop size is
-256 x 256 pixels. With the ViT-B/16 patch size, this corresponds to 64 template tokens
-and 256 search tokens. Both crops are normalized with the usual ImageNet mean and
-standard deviation values commonly used in transformer-based vision models.
+It is also important that OSTrack uses a pretrained ViT backbone. The original OSTrack
+paper shows that the choice of backbone initialization has a significant effect on
+tracking performance, with pretrained ViT models performing much better than training
+the backbone from scratch \[13\]. This is expected because tracking datasets are usually
+not large enough to learn strong general-purpose visual features without pretraining.
+In this thesis, the model uses the `mae_pretrain_vit_base.pth` MAE-pretrained ViT-Base
+checkpoint, following the OSTrack configuration. MAE pretraining teaches the backbone
+useful visual representations by masking image patches and training the model to
+reconstruct the missing content \[24\]. This makes the backbone a strong starting point
+for tracking, while the proposed memory extension can be studied as an augmentation of
+the existing OSTrack architecture rather than as a completely new feature extractor.
 
-The backbone is `vit_base_patch16_224_ce`, initialized from the
-`mae_pretrain_vit_base.pth` checkpoint. This detail is important because the quality of
-the pretrained backbone has a large influence on tracking performance. Using the same
-MAE-pretrained ViT-Base style backbone, the same 256 search resolution, and the same CE
-setting makes the experiment directly comparable to the OSTrack-256 + CE configuration
-reported in the original OSTrack article.
+## 2.3 Candidate elimination
 
-This description intentionally remains at the level needed for the thesis. Exact
-implementation details depend on the codebase, but the important baseline property is
-clear: the tracker processes template and search tokens jointly, has no explicit
-recurrent memory across frames, and predicts the target from the resulting search
-features.
+OSTrack introduces candidate elimination (CE) to reduce the number of search tokens
+processed by the transformer backbone. In a template-search tracker, the search crop
+contains both the target and many background patches. CE removes search tokens that are
+unlikely to correspond to the target, reducing computation while keeping the most
+relevant candidates [13].
 
-## 2.3 Candidate elimination and token-budget comparison
+OSTrack chooses candidates using attention between the template and search tokens. After
+a self-attention layer, a representative template token is used to score the search
+tokens. In the standard setting, this representative token is the center template token,
+because the target is normally centered in the template crop. If this token is denoted
+by ϕ, and the transformer has M attention heads, the score of a search token
+is computed by averaging the attention from ϕ to that search token over all heads:
 
-The original OSTrack framework includes a candidate early elimination mechanism to
-improve efficiency by dropping unlikely search tokens \[13\]. In the CE configuration
-used here, candidate elimination is applied at three ViT layers with keep ratio
-`rho = 0.7`. The implementation keeps template tokens and memory tokens, while pruning
-only the search-token stream.
+w
+x
+ϕ
+​
 
-The reported baselines used for final comparison are OSTrack-256 + CE with GOT-10k AO
-71.0, SR0.50 80.4, and SR0.75 68.2, and OSTrack-384 + CE with GOT-10k AO 73.7,
-SR0.50 83.2, and SR0.75 70.8 \[13\]. In decimal form these values are 0.710, 0.804,
-0.682 for OSTrack-256 + CE and 0.737, 0.832, 0.708 for OSTrack-384 + CE. The 256
-baseline is the same-resolution comparison, while the 384 baseline is a stronger
-high-resolution reference.
+=
+M
+1
+​
 
-The token budget helps interpret the comparison. With a ViT-B/16 backbone, the
-128 x 128 template in OSTrack-256 produces 64 template tokens and the 256 x 256 search
-region produces 256 search tokens, for 320 visual tokens before candidate elimination.
-Adding 64 memory tokens gives MemOSTrack-256 + CE an initial sequence length of 384
-tokens. In OSTrack-384, the 192 x 192 template produces 144 template tokens and the
-384 x 384 search region produces 576 search tokens, for 720 visual tokens. Therefore,
-MemOSTrack-256 + CE has more tokens than OSTrack-256 + CE, but still far fewer
-tokens than OSTrack-384 + CE.
+m=1
+∑
+M
+​
+
+w
+x
+ϕ
+​
+
+(m).
+
+Search tokens with the highest scores are kept, while lower-scoring tokens are removed
+from the sequence for later transformer layers. If k tokens are kept from n
+current search tokens, the keep ratio is:
+
+ρ=
+n
+k
+​
+
+.
+
+The kept search-token indices can be written as:
+
+I
+keep
+​
+
+=TopK(w
+x
+ϕ
+​
+
+,k).
+
+The original positions of the kept search tokens are stored so that the spatial search
+feature map can be reconstructed before the prediction head [13].
+
+This matters for MemOSTrack because the proposed model adds memory tokens to the
+OSTrack token sequence. In this implementation, CE is applied only to search tokens.
+Template tokens are preserved, and memory tokens are also preserved because they are
+recurrent latent states rather than spatial search candidates. Memory tokens participate
+in attention, but they are not used to score search candidates and are not removed by CE.
+Thus, candidate elimination keeps its original role of pruning search-region candidates,
+while the recurrent memory stream remains available throughout the backbone.
 
 ## 2.4 Standard OSTrack training
 
@@ -500,24 +482,6 @@ because each training sample can be treated independently.
 Here z is the template crop, x_t is the search crop, and B_t is the target box in the
 search crop. The model predicts \hat{B}\_t, and the loss compares it with B_t. This
 setup does not require any state from previous search frames.
-
-*Figure 2.2 - Original pair-based sampling.*
-
-<table>
-<colgroup>
-<col style="width: 100%" />
-</colgroup>
-<thead>
-<tr class="header">
-<th><p>■</p>
-<p>A video sequence contains many frames: F1, F2, F3, ..., FT.</p>
-<p>Pair-based training samples a template frame and one search frame.</p>
-<p>Intermediate frames do not influence the current training sample.</p></th>
-</tr>
-</thead>
-<tbody>
-</tbody>
-</table>
 
 ## 2.5 Limitations of pair-based tracking for memory
 
@@ -535,8 +499,9 @@ model trained only on perfect ground-truth-centered crops may be less prepared f
 drift.
 
 These two limitations motivated the major training-pipeline changes described in Chapter
+
 4. The architecture alone was not enough. A recurrent tracker also needed a recurrent
-training process.
+   training process.
 
 # 3. Proposed Memory-Augmented OSTrack
 
@@ -596,7 +561,7 @@ $$
 =
 \operatorname{ViTLayer}_l
 \left(
-    \left[ S_{t,l-1}, T_{t,l-1}, M_{t,l-1} \right]
+\left[ S_{t,l-1}, T_{t,l-1}, M_{t,l-1} \right]
 \right).
 $$
 
@@ -637,21 +602,22 @@ $$
 U_{t,l}
 &=
 X_{t,l-1}
+
 + \operatorname{DropPath}_l(
-    \operatorname{Attn}_l(
-        \operatorname{LN}_{1,l}(X_{t,l-1})
-    )
-), \\
-X_{t,l}
-&=
-U_{t,l}
+  \operatorname{Attn}_l(
+  \operatorname{LN}_{1,l}(X_{t,l-1})
+  )
+  ), \\
+  X_{t,l}
+  &=
+  U_{t,l}
 + \operatorname{DropPath}_l(
-    \operatorname{MLP}_l(
-        \operatorname{LN}_{2,l}(U_{t,l})
-    )
-).
-\end{aligned}
-$$
+  \operatorname{MLP}_l(
+  \operatorname{LN}_{2,l}(U_{t,l})
+  )
+  ).
+  \end{aligned}
+  $$
 
 After this block, the first `K` tokens are split out as the memory candidate:
 
@@ -766,121 +732,6 @@ more recurrent in form and uses learned gates inside each update. The three-way
 gated update remains a useful future ablation because it would test whether a
 simpler explicit fusion rule is sufficient.
 
-## 3.5 Comparison of the two variants
-
-The two variants represent different stages of the research process. Variant A
-asks whether adding memory tokens alone is enough. Variant B asks whether memory
-needs an explicit recurrent update. Presenting both is important because the
-final architecture was not chosen arbitrarily; it was motivated by the weakness
-of the first implementation.
-
-| Component | Variant A: memory tokens only | Variant B: memory + GRU |
-|---|---|---|
-| Memory tokens | Yes | Yes |
-| Explicit recurrent gate | No | Yes |
-| Transformer role | Directly updates memory | Produces candidate memory |
-| Previous-frame memory | Passed forward implicitly | Used by `GRU1` |
-| Previous-layer memory | Used through normal layer flow | Used by `GRU2` |
-| Update behavior | Direct transformer output | Gated recurrent update |
-| Main risk | Memory can be overwritten | More parameters and harder optimization |
-| Purpose | Minimal first prototype | Final controlled memory update |
-
-The no-GRU model is therefore not a failed design to hide. It is part of the
-experimental logic of the thesis. It establishes the simplest memory-token
-extension and explains why the GRU variant was added.
-
-The two-stage GRU design uses two recurrent sources because memory has to move
-in two directions: through time and through network depth. The temporal source
-is important because tracking is sequential. If the target gradually changes
-appearance, memory from the previous frame may contain a more recent target
-representation than the initial template. It also creates a direct differentiable
-connection between neighboring frames during backpropagation through time.
-
-The layer-wise source is important because transformer layers refine features
-gradually. By using `M_{t,l-1}`, the update allows lower-layer memory
-information to influence higher-layer memory without forcing all memory to pass
-only through attention over the full token sequence. This creates a shorter path
-inside the memory stream. It does not guarantee better performance, but it is a
-reasonable architectural hypothesis.
-
-The main notation used in the architecture is summarized below.
-
-| Symbol | Meaning |
-|---|---|
-| `S_{t,l}` | Search tokens at frame `t` and layer `l` |
-| `T_{t,l}` | Template tokens at frame `t` and layer `l` |
-| `M_{t,l}` | Final memory tokens at frame `t` and layer `l` |
-| `M'_{t,l}` | Candidate memory produced by the transformer layer |
-| `M_{t-1,l}` | Memory from the previous frame at the same layer |
-| `M_{t,l-1}` | Memory from the previous layer in the current frame |
-| `\tilde{M}_{t,l}` | Intermediate memory after the first GRU update |
-
-## 3.6 Forward pass, implementation details, and hyperparameters
-
-For clarity, the final memory-augmented layer can be described as an algorithm.
-The layer receives search tokens, template tokens, memory from the previous
-layer in the current frame, and memory saved from the previous frame at the same
-layer. The tokens are concatenated and processed by the standard transformer
-block. The output is split back into search, template, and memory parts. The
-memory part is treated as candidate memory and is passed through the two-stage
-GRU update.
-
-```python
-# Inputs:
-#   S: search tokens
-#   T: template tokens
-#   M_layer: memory from the previous layer in the current frame
-#   M_time: memory from the previous frame at the same layer
-
-Y = concat(S, T, M_layer)
-Y_out = transformer_layer(Y)
-S_out, T_out, M_candidate = split(Y_out)
-
-M_temporal = GRU1(input=M_candidate, hidden=M_time)
-M_final = GRU2(input=M_temporal, hidden=M_layer)
-
-return S_out, T_out, M_final
-```
-
-This algorithm also shows where implementation errors can occur. Token splitting
-must match token concatenation. Memory for each transformer layer must be stored
-separately across frames. The recurrent state must be reset at the beginning of a
-new video sequence. If memory from one video is carried into another unrelated
-video, the recurrent state becomes semantically invalid.
-
-The memory extension also required changes to optimizer parameter grouping. The
-project code contained memory-specific parameters such as `backbone.mem_*` and
-`backbone.read_mem_embed`. These parameters should not accidentally receive an
-unsuitable learning-rate schedule inherited from the pretrained backbone group.
-
-Separate learning rates are important because the model combines pretrained and
-newly initialized components. The backbone starts from a pretrained ViT-style
-checkpoint and should usually be updated carefully. The memory tokens and
-GRU-related parameters start from a less specialized state and may need a larger
-or separately controlled learning rate. If the memory parameters learn too
-slowly, the baseline template-search path can dominate and memory may be
-ignored. If they learn too aggressively, they can disturb the pretrained
-representation.
-
-Gradient clipping also becomes more important after introducing recurrent
-sequence training. In pair-based training, each sample contributes an independent
-loss. In sequence training, losses from several frames are accumulated while
-memory is propagated. Dynamic cropping can also create hard examples when early
-predictions move the crop away from the target. Clipping the gradient norm is a
-practical safeguard against occasional unstable updates.
-
-The architectural comparison with the baseline is summarized below.
-
-| Component | OSTrack-256 + CE | MemOSTrack-256 + CE |
-|---|---|---|
-| Template tokens | Yes | Yes |
-| Search tokens | Yes | Yes |
-| Memory tokens | No | Yes |
-| Recurrent state | No explicit recurrent state | Memory propagated across frames |
-| Backbone type | ViT-style one-stream transformer | ViT-style one-stream transformer with memory |
-| Candidate elimination | Used | Used |
-| Memory update | Not applicable | Two-stage GRU update |
-
 # 4. Sequence-Based and Inference-Like Training
 
 ## 4.1 Why the original sampler was insufficient
@@ -919,26 +770,6 @@ This rewrite made it possible to train the GRU update. After each frame, the mem
 output becomes the memory input for the next frame. Losses can be applied at each step
 or accumulated over the sequence.
 
-*Figure 4.1 - Sequence-based sampling.*
-
-<table>
-<colgroup>
-<col style="width: 100%" />
-</colgroup>
-<thead>
-<tr class="header">
-<th><p>■</p>
-<p>Before: template frame plus one search frame.</p>
-<p>After: template frame plus an ordered sequence of search frames.</p>
-<p>The memory state is propagated through the sequence.</p></th>
-</tr>
-</thead>
-<tbody>
-</tbody>
-</table>
-
-## 4.3 Remaining problem: ground-truth-centered crops
-
 Sequence sampling solved the temporal ordering problem, but it did not solve the
 train/inference mismatch. If every search crop is centered using the ground-truth box of
 that same frame, training remains artificially easy. The target is always near the
@@ -959,7 +790,7 @@ available at inference time. The difference matters more for recurrent memory be
 memory can amplify errors. If the tracker is never trained under realistic drift, the
 memory may behave poorly when drift occurs during testing.
 
-## 4.4 Final rewrite: dynamic search cropping
+## 4.3 Dynamic search cropping
 
 The final sampling rewrite introduced dynamic search crop generation. Instead of
 precomputing all search crops around their ground-truth boxes, the training loop
@@ -979,33 +810,7 @@ This loop is more difficult than ordinary pair-based training, but it is concept
 closer to inference. The tracker sees the consequences of its own predictions, and the
 memory state is updated under conditions similar to deployment.
 
-*Figure 4.2 - Dynamic search cropping.*
-
-<table>
-<colgroup>
-<col style="width: 100%" />
-</colgroup>
-<thead>
-<tr class="header">
-<th><p>■</p>
-<p>Frame t: crop around previous prediction and predict current box.</p>
-<p>Frame t+1: crop around the prediction from frame t.</p>
-<p>Training becomes closer to the actual inference loop.</p></th>
-</tr>
-</thead>
-<tbody>
-</tbody>
-</table>
-
-*Table 4.1 - Evolution of the sampling pipeline.*
-
-| **Stage**                 | **Input form**       | **Crop center**      | **Memory training quality** | **Inference similarity** |
-|---------------------------|----------------------|----------------------|-----------------------------|--------------------------|
-| Original OSTrack sampling | Template-search pair | Current ground truth | No recurrent memory         | Low                      |
-| First rewrite             | Ordered sequence     | Current ground truth | Memory can be propagated    | Medium                   |
-| Final rewrite             | Ordered sequence     | Previous prediction  | Memory sees realistic drift | High                     |
-
-## 4.5 Coordinate transformations in dynamic cropping
+## 4.4 Coordinate transformations in dynamic cropping
 
 Dynamic cropping requires careful coordinate handling. The tracker predicts a box in the
 coordinate system of the search crop, but the next crop must be produced in the
@@ -1101,31 +906,14 @@ trained with a more demanding pipeline than simple pair-based training. The resu
 score being slightly lower than baseline may partly reflect the difficulty of optimizing
 a model under inference-like drift.
 
-## 4.9 Practical consequences for batching
-
-Sequence-based training also affects batching. In pair-based training, each element of a
-batch can be processed independently. In sequence training, each element contains
-multiple ordered frames and the model must loop over them. This increases memory
-consumption and computation time. It also requires careful handling of tensor shapes:
-the batch dimension and sequence dimension must not be confused.
-
-The sampler must return not only images, but also the ordered annotations needed to
-compute losses and transform predictions between crop coordinates and original image
-coordinates. Dynamic cropping adds further complexity because the crop for frame t is
-not known until the prediction for frame t-1 has been computed.
-
-This engineering work is a central part of the thesis. Without it, the memory
-architecture would not be trained in the way it is intended to be used.
-
 # 5. Auxiliary Memory Supervision
 
-## 5.1 Why memory can be ignored
+## 5.1 Auxiliary Loss Concept
 
 Adding memory tokens to a strong model does not guarantee that the model will use them.
-OSTrack already has a powerful template-search pathway. If the tracker can solve the
+OSTrack already has a powerful template-search pathway. Since the tracker can solve the
 training task using template and search tokens alone, the new memory tokens may receive
-weak or unimportant gradients. In that case, the architecture contains memory, but the
-learned function remains close to the baseline.
+weak or unimportant gradients. This creates the risk of the tracker learning to converge memory.
 
 This is a common issue when adding auxiliary modules to strong neural networks. The
 optimization process often finds the easiest path to reduce the loss. If the template is
@@ -1136,132 +924,186 @@ functional.
 The project therefore explored auxiliary memory supervision. The goal was to make memory
 tokens directly useful for prediction rather than merely present in the token sequence.
 
-## 5.2 Memory loss heads
+### 5.3 DiMP Target-Match Loss
 
-A memory loss head is an auxiliary prediction head attached to memory tokens. The main
-OSTrack head predicts the target from the ordinary tracking features. The memory head
-predicts a target-related output from memory tokens.
+The second auxiliary loss is the DiMP-style target-match loss. Instead of directly testing every predicted memory
+filter on sampled frames, this loss first constructs a stronger sequence-level target filter and then trains each
+predicted memory filter to match it.
 
-*M\_{t,l} -\> Head\_{mem} -\> \hat{B}^{mem}\_t.*
+This idea is inspired by DiMP, where tracking is formulated as learning a target-specific discriminative model from
+training samples. DiMP shows that online target model prediction can use both target and background information,
+instead of only matching a target template. ([arXiv][2])
 
-The auxiliary prediction is compared with the ground-truth box:
+The proposed DiMP-style target-match loss is not a reimplementation of the full DiMP tracker. Instead, it borrows the
+idea of fitting a discriminative target filter from a sequence of search features. The fitted filter is used as a
+detached pseudo-label for the memory branch. This differs from original DiMP, where the optimized filter is the actual
+target classifier used for tracking. The simplification is intentional: the goal is not to replace OSTrack's prediction
+head, but to provide direct supervision that encourages the added memory tokens to encode information useful for target
+discrimination.
 
-*L\_{mem} = L\_{box}(\hat{B}^{mem}\_t, B^{gt}\_t).*
+The implementation first collects all available detached search features:
 
-The total loss can then be written as:
+$$
+x_1, \dots, x_T
+$$
 
-*L = L\_{main} + λ\_{mem} L\_{mem}.*
+and their ground-truth heatmaps:
 
-Here lambda_mem controls the strength of the auxiliary memory supervision. In principle,
-this encourages memory tokens to encode information that is useful for localization. The
-memory head does not necessarily have to be used during inference. It can be a
-training-time tool that makes the memory state more predictive.
+$$
+y_1, \dots, y_T.
+$$
 
-*Figure 5.1 - Auxiliary memory loss head.*
+It then fits a target filter $f^*$ by minimizing:
 
-<table>
-<colgroup>
-<col style="width: 100%" />
-</colgroup>
-<thead>
-<tr class="header">
-<th><p>■</p>
-<p>Memory tokens are passed to a separate prediction head.</p>
-<p>The auxiliary prediction is compared with the ground-truth box.</p>
-<p>The loss encourages memory tokens to contain tracking-relevant information.</p></th>
-</tr>
-</thead>
-<tbody>
-</tbody>
-</table>
+$$
+L(f) = \operatorname{mean}\left(\lVert x * f - y \rVert_2^2\right)
++ \lambda \operatorname{mean}\left(\lVert f \rVert_2^2\right).
+$$
 
-## 5.3 Issues encountered with memory heads
+Here, $f^*$ is the filter that best matches the whole training sequence under this least-squares objective. The code
+solves this using a DiMP-style steepest-descent solver with an analytic step length. The inner solver is run under
+`torch.no_grad()`, so the optimized target filter is treated as a pseudo-label rather than as a fully differentiable
+inner optimization process.
 
-The first issue is that memory tokens are abstract. Search tokens correspond to image
-patches, so it is natural to use them for spatial prediction. Memory tokens do not have
-the same direct spatial meaning. A memory token may store target identity, appearance,
-motion context, or information distributed across several frames. Predicting a box from
-such tokens is therefore less straightforward.
+After computing the target filter, the predicted memory filters are trained to match it:
 
-The second issue is loss balancing. If the memory loss is too weak, it may not change
-the behavior of the model. If it is too strong, it may interfere with the main tracking
-objective and damage the pretrained representation. This is especially important because
-the baseline is already strong. The auxiliary objective should guide the memory branch
-without forcing the whole model to optimize an unstable secondary task.
+$$
+L_{\text{match}} = w_{\text{match}} \frac{1}{M} \sum_i \lVert f_i - f^* \rVert_2^2.
+$$
 
-The third issue is early training noise. At the beginning of training, the memory branch
-is not yet reliable. If its predictions are poor, the auxiliary loss can generate noisy
-gradients. Since the memory is recurrent, early poor states can influence later frames
-in the same sequence. This makes it necessary to tune the loss weight and possibly apply
-the memory loss only after a warm-up period.
+where:
 
-The fourth issue is shortcut learning through the template. Even with memory loss heads,
-the main branch may rely heavily on the clean template. If the template contains a
-strong appearance cue, the model may have little incentive to develop a robust memory
-representation.
+- $f_i$ is the predicted memory filter from frame $i$.
+- $f^*$ is the optimized sequence-level target filter.
+- $w_{\text{match}}$ is `FILTER_MATCH_WEIGHT`.
+- $M$ is the number of predicted memory filters.
 
-## 5.4 Template blurring as a solution
+In the implementation, the initial filter is the mean of detached predicted memory filters, the target filter is
+optimized over all common feature frames, and the final loss is the mean squared difference between each predicted
+filter and the optimized target filter.
 
-Template blurring was considered as a way to reduce over-reliance on the initial
-template. The idea is not to remove the template completely, but to weaken it enough
-that the model benefits from using memory. If the template is too clean, the tracker can
-solve many training examples by direct template-search matching. If the template is
-partially blurred, the recurrent memory stream becomes more valuable.
+This loss has several advantages over the direct loss. It gives the memory branch a more stable target, because $f^*$
+is estimated from the full sequence rather than from a small random sample. It also avoids the quadratic cost of
+applying every predicted filter to every previous frame. With $K$ inner optimization steps and $T$ frames, the fitting
+cost is closer to:
 
-*\tilde{z} = Blur(z), \hat{B}\_t = f(\tilde{z}, x_t, M\_{t-1}).*
+$$
+O(KT)
+$$
 
-This acts as a regularization method. It encourages the model to treat the template as
-an initial identity cue rather than a perfect appearance reference. The memory can then
-store information from later observations. This idea is especially relevant for a
-tracker that processes a sequence: the target may be visible more clearly in later
-frames than in the first template, or it may change appearance in a way that the first
-template cannot represent.
+instead of:
 
-Template blurring must be used carefully. If the blur is too weak, it does not change
-the learning problem. If it is too strong, the tracker may lose target identity and
-become unstable. The best setting is likely task-dependent and should be selected
-through ablation studies. In this thesis, template blurring is presented as an explored
-solution to the memory-usage problem, not as a fully optimized technique.
+$$
+O(T^2)
+$$
 
-*Figure 5.2 - Template blurring motivation.*
+when $K$ is fixed and much smaller than $T$. The loss also encourages temporal consistency, because all memory filters
+are pulled toward the same sequence-level target model.
 
-<table>
-<colgroup>
-<col style="width: 100%" />
-</colgroup>
-<thead>
-<tr class="header">
-<th><p>■</p>
-<p>Clean template: model can rely mostly on initial appearance.</p>
-<p>Blurred template: initial appearance is weakened but not removed.</p>
-<p>Memory stream is encouraged to carry recent target information.</p></th>
-</tr>
-</thead>
-<tbody>
-</tbody>
-</table>
+The main weakness is that the method depends on the quality of the fitted target filter. If $f^*$ is inaccurate, all
+predicted memory filters are encouraged to imitate a poor pseudo-target. It is also more complex than the direct loss,
+because it requires an inner optimization procedure. Finally, the loss supervises filter similarity rather than directly
+measuring the final tracking output, so it remains an auxiliary signal rather than a replacement for the main GIoU, L1,
+and localization losses. In the training actor, the memory loss is added to the main tracking objective using the
+configured memory loss weight.
 
-*Table 5.1 - Memory supervision issues and responses.*
+[2]: https://arxiv.org/abs/1904.07220 "Learning Discriminative Model Prediction for Tracking"
 
-| **Issue**                   | **Cause**                                    | **Response explored in this thesis**      |
-|-----------------------------|----------------------------------------------|-------------------------------------------|
-| Memory may be ignored       | Baseline template-search path is strong      | Auxiliary memory loss heads               |
-| Template dominates          | Clean initial template is highly informative | Template blurring during training         |
-| Memory head instability     | Memory tokens are not naturally spatial      | Careful loss weighting and analysis       |
-| Recurrent error propagation | Bad early memory affects later frames        | Inference-like training exposes the issue |
+### 5.4 Template Blurring
 
-## 5.5 What memory supervision should prove
+Due to the added complexity of explicit auxiliary memory losses, the final approach uses **template blurring** as a
+simpler memory-supervision strategy. OSTrack is already a strong one-stream tracker, where template and search features
+are jointly processed through bidirectional information flow. Therefore, the model may solve the training task without
+strongly relying on the added memory tokens. ([arXiv][1]) Template blurring is intended to reduce the reliability of the
+template pathway and encourage the tracker to use memory tokens as an additional source of target appearance information.
 
-The expected behavior is qualitative: the model should use the template to initialize
-identity, search tokens to observe the current frame, and memory tokens to preserve and
-update target information over time. If the memory branch is useful, blurring the
-template should not completely destroy tracking performance because the tracker can
-compensate with temporal information.
+Let the original template be
 
-This idea also makes the thesis more realistic. Adding memory is not only about
-architecture; it is about creating a training environment in which memory is needed.
-Memory loss heads, template blurring, and dynamic cropping are all attempts to prevent
-the model from solving the task through the simplest baseline pathway.
+$$
+z
+$$
+
+and the corrupted template be
+
+$$
+\tilde{z}.
+$$
+
+Two corruption modes were considered. In the first mode, the template is blurred:
+
+$$
+\tilde{z} = \text{Blur}(z).
+$$
+
+In the second mode, the template is replaced by zeros:
+
+$$
+\tilde{z} = 0.
+$$
+
+The blur mode is less aggressive because it removes high-frequency appearance details while preserving coarse target
+structure. However, it may still allow the model to recover useful information from the degraded template itself. For this
+reason, zero replacement was also considered. The zero mode removes the template appearance completely, making it harder
+for the model to solve the task by reconstructing or compensating for the corrupted template. This creates stronger
+pressure to use the information stored in memory tokens.
+
+The implementation is controlled by a `MemoryTemplateCorruption` module. It reads configuration values for whether
+corruption is enabled, the corruption mode, the number of corrupted frames, the blur kernel size, and the number of blur
+passes. The implementation supports two modes: `blur` and `zero`. In `zero` mode, the corrupted template is created with
+`torch.zeros_like`. In `blur` mode, repeated average pooling is applied to the template tensor. The blur kernel size must
+be an odd integer greater than one, and the number of blur passes must be positive.
+
+A key implementation detail is that the first two search frames are never selected for template corruption. This is
+controlled by
+
+$$
+\texttt{skip\_first} = 2.
+$$
+
+The selected corruption candidates therefore start only after the first two search frames. This design allows the tracker
+to process several clean frames before template corruption is introduced, which is useful for establishing an initial
+memory state. The module samples a fixed number of frame indices from the remaining candidate frames independently for
+each batch element and stores the result in a boolean blur mask.
+
+The method also requires sufficiently long training sequences. The implementation checks that the number of search frames
+is greater than
+
+$$
+2n_{\text{blur}} + \texttt{skip\_first},
+$$
+
+where \(n_{\text{blur}}\) is the configured number of frames to corrupt. If this condition is not satisfied, validation
+raises an error, or the sample is skipped during mask construction. This check avoids applying corruption in very short
+sequences where there are not enough clean frames and later candidate frames.
+
+During training, the actor builds a blur mask for the full sequence. During evaluation, the blur mask is set to all false,
+so template corruption is only a training-time mechanism. For each selected frame, the corrupted template is substituted
+for the clean template before the network forward pass. For unselected samples, the original template is kept. Template
+blurring is also made mutually exclusive with the explicit auxiliary memory losses, which avoids mixing two different
+memory-supervision mechanisms.
+
+The main advantage of template blurring is its simplicity. It does not require an additional memory-filter objective,
+a DiMP-style inner solver, or a pseudo-label for memory filters. The tracker is still trained using the standard tracking
+losses, while the input corruption changes which information sources are reliable. This makes the method easier to
+implement and analyze than the auxiliary losses described in the previous sections.
+
+A second advantage is that template blurring affects the actual tracking pathway. The auxiliary filter losses supervise
+intermediate filter representations, while template blurring changes the information available to the full tracker.
+Improved performance on corrupted-template frames would suggest that the memory tokens provide useful target appearance
+information for final prediction.
+
+However, template blurring is still an indirect form of supervision. It does not explicitly require a memory token to
+encode a specific target representation. The model may still learn to rely on other cues, such as the search crop, instead
+of fully exploiting memory. Another limitation is that template blurring mainly encourages memory to store appearance
+information. It does not directly provide motion supervision. Therefore, it may not fully encourage memory tokens to learn
+temporal cues such as target displacement, velocity, or motion consistency across frames.
+
+Overall, template blurring creates a controlled training condition in which the original template pathway is weakened.
+Compared with explicit auxiliary losses, it is less direct but substantially simpler and does not change the main tracking
+objective.
+
+[1]: https://arxiv.org/abs/2203.11991 "Joint Feature Learning and Relation Modeling for Tracking: A One-Stream Framework"
+
 
 # 6. Experimental Setup
 
@@ -1270,14 +1112,9 @@ the model from solving the task through the simplest baseline pathway.
 The experiments are done on the GOT-10K dataset. GOT-10k is a
 generic object tracking benchmark with more than 10,000 video segments and more than 1.5
 million labeled bounding boxes \[20\]. The testing data is not labled and are evaluated by the offcial dataset website.
-The baseline OsTrack paper publishes a detailed report of their tracker perfomance on Got-10k in different configurations. 
-The model is trained exclusively on the GOT-10k data without external samples from different datasets. 
-
-The final comparison uses AO, SR0.50, and SR0.75. The baseline values are taken from
-reported CE-enabled OSTrack results: OSTrack-256 + CE with AO 0.710, SR0.50 0.804,
-and SR0.75 0.682, and OSTrack-384 + CE with AO 0.737, SR0.50 0.832, and SR0.75
-0.708 \[13\]. The MemOSTrack values are the experimental results obtained for this
-thesis.
+The baseline OsTrack paper publishes a detailed report of their tracker perfomance on Got-10k in different
+configurations.
+The model is trained exclusively on the GOT-10k data without external samples from different datasets.
 
 
 ## 6.2 Model configuration
@@ -1292,37 +1129,7 @@ sequence, two-stage GRU recurrent update, candidate elimination enabled with kee
 predictions in the final pipeline. The recurrent training was initially performed with
 20-frame search rollouts; in the later stages, this was reduced to 15-frame rollouts.
 
-This configuration is an experimental prototype. It is not claimed to be the optimal
-memory-augmented tracker. The purpose is to investigate whether the idea is feasible and
-how it behaves compared with a strong baseline.
-
-*Table 6.1 - Main model and training configuration.*
-
-
-## 6.3 Training details
-
-The training process required several implementation changes beyond normal
-hyperparameter selection. First, the sampler had to return ordered frame sequences.
-Second, the training loop had to propagate memory across frames in each sequence. Third,
-dynamic cropping required the previous predicted box to be converted into the coordinate
-system of the next image. Fourth, new memory parameters had to be included correctly in
-the optimizer.
-
-The experiment reported in this thesis was evaluated after the available training run.
-The user-provided development note used the phrase '58 training iterations'. In the
-final submitted thesis, this phrase should be checked against the actual training logs.
-If the value means epochs, the thesis should say '58 epochs'. If it means checkpoints,
-it should say '58 checkpoints'. If it literally means optimizer iterations, then the
-model was severely undertrained and the result should be presented as preliminary. This
-draft uses the cautious phrase 'available training run' unless the exact meaning is
-confirmed.
-
-This caution is important for scientific accuracy. A thesis can report negative or
-inconclusive results, but the training budget must be described precisely. The result
-should not be overstated if the training run was shorter than the baseline training
-schedule.
-
-## 6.4 Hyperparameter and optimizer considerations
+## 6.3 Hyperparameter and optimizer considerations
 
 The memory-augmented model has two different kinds of trainable parameters. The
 pretrained backbone already contains general visual representations. The memory tokens,
@@ -1363,16 +1170,14 @@ weights. Those studies are listed as future work.
 
 ## 6.6 Reproducibility considerations
 
-For reproducibility, the final implementation should record the exact code revision,
-dataset split, training command, random seed if used, hardware, number of epochs or
-optimizer steps, checkpoint used for evaluation, and configuration file. These details
-are especially important for memory-based trackers because small changes in sequence
-sampling can produce different training behavior.
+The reported MemOSTrack result depends on the exact configuration file, checkpoint,
+GOT-10k split, and sequence-sampling setup used during evaluation. These details are
+especially important for memory-based trackers because small changes in rollout length
+or crop generation can produce different training behavior.
 
-The thesis should also clearly separate external baseline numbers from the author's own
-results. The OSTrack baseline numbers are reported values from the literature \[13\].
-The MemOSTrack numbers are experimental results from this work. Presenting them in
-the same table is useful, but their sources should be distinct.
+The comparison also separates external baseline numbers from the author's own results.
+The OSTrack baseline numbers are reported values from the literature \[13\]. The
+MemOSTrack numbers are experimental results from this work.
 
 # 7. Results and Discussion
 
@@ -1385,30 +1190,11 @@ CE baseline achieves AO 0.737, SR0.50 0.832, and SR0.75 0.708 \[13\].
 
 *Table 7.1 - Final quantitative comparison.*
 
-| **Method**               | **AO** | **SR0.50** | **SR0.75** | **MemOSTrack - method AO** | **MemOSTrack - method SR0.50** | **MemOSTrack - method SR0.75** |
-|--------------------------|-------:|-----------:|-----------:|---------------------------:|-------------------------------:|-------------------------------:|
-| MemOSTrack-256 + CE   | 0.729  | 0.823      | 0.693      | -                          | -                              | -                              |
-| OSTrack-256 + CE         | 0.710  | 0.804      | 0.682      | +0.019                     | +0.019                         | +0.011                         |
-| OSTrack-384 + CE         | 0.737  | 0.832      | 0.708      | -0.008                     | -0.009                         | -0.015                         |
-
-*Figure 7.1 - Metric comparison placeholder.*
-
-<table>
-<colgroup>
-<col style="width: 100%" />
-</colgroup>
-<thead>
-<tr class="header">
-<th><p>■</p>
-<p>Bar chart placeholder: MemOSTrack-256 + CE vs OSTrack-256 + CE vs OSTrack-384 + CE.</p>
-<p>Metrics: AO, SR0.50, SR0.75.</p>
-<p>Observed gaps: +0.019/+0.019/+0.011 against OSTrack-256 + CE and
--0.008/-0.009/-0.015 against OSTrack-384 + CE.</p></th>
-</tr>
-</thead>
-<tbody>
-</tbody>
-</table>
+| **Method**          | **AO** | **SR0.50** | **SR0.75** | **MemOSTrack - method AO** | **MemOSTrack - method SR0.50** | **MemOSTrack - method SR0.75** |
+|---------------------|-------:|-----------:|-----------:|---------------------------:|-------------------------------:|-------------------------------:|
+| MemOSTrack-256 + CE |  0.729 |      0.823 |      0.693 |                          - |                              - |                              - |
+| OSTrack-256 + CE    |  0.710 |      0.804 |      0.682 |                     +0.019 |                         +0.019 |                         +0.011 |
+| OSTrack-384 + CE    |  0.737 |      0.832 |      0.708 |                     -0.008 |                         -0.009 |                         -0.015 |
 
 The result improves over the same-resolution OSTrack-256 + CE baseline on all three
 metrics. The gains are 0.019 AO, 0.019 SR0.50, and 0.011 SR0.75. This indicates that,
@@ -1437,12 +1223,12 @@ sequence length would be 784 tokens.
 
 *Table 7.2 - Input token counts before candidate elimination.*
 
-| **Model setting** | **Template tokens** | **Search tokens** | **Memory tokens** | **Initial tokens** |
-|-------------------|--------------------:|------------------:|------------------:|-------------------:|
-| OSTrack-256 + CE | 64 | 256 | 0 | 320 |
-| MemOSTrack-256 + CE | 64 | 256 | 64 | 384 |
-| OSTrack-384 + CE | 144 | 576 | 0 | 720 |
-| Hypothetical MemOSTrack-384 + CE | 144 | 576 | 64 | 784 |
+| **Model setting**                | **Template tokens** | **Search tokens** | **Memory tokens** | **Initial tokens** |
+|----------------------------------|--------------------:|------------------:|------------------:|-------------------:|
+| OSTrack-256 + CE                 |                  64 |               256 |                 0 |                320 |
+| MemOSTrack-256 + CE              |                  64 |               256 |                64 |                384 |
+| OSTrack-384 + CE                 |                 144 |               576 |                 0 |                720 |
+| Hypothetical MemOSTrack-384 + CE |                 144 |               576 |                64 |                784 |
 
 Candidate elimination changes the active sequence length inside the backbone. In the
 configuration used here, search tokens are pruned at three layers with keep ratio
@@ -1453,12 +1239,12 @@ tokens to 180, then 126, then 89. The 384 search stream is reduced from 576 toke
 
 *Table 7.3 - Active token counts after CE pruning.*
 
-| **Model setting** | **Initial tokens** | **After CE 1** | **After CE 2** | **After CE 3** |
-|-------------------|-------------------:|---------------:|---------------:|---------------:|
-| OSTrack-256 + CE | 320 | 244 | 190 | 153 |
-| MemOSTrack-256 + CE | 384 | 308 | 254 | 217 |
-| OSTrack-384 + CE | 720 | 548 | 427 | 343 |
-| Hypothetical MemOSTrack-384 + CE | 784 | 612 | 491 | 407 |
+| **Model setting**                | **Initial tokens** | **After CE 1** | **After CE 2** | **After CE 3** |
+|----------------------------------|-------------------:|---------------:|---------------:|---------------:|
+| OSTrack-256 + CE                 |                320 |            244 |            190 |            153 |
+| MemOSTrack-256 + CE              |                384 |            308 |            254 |            217 |
+| OSTrack-384 + CE                 |                720 |            548 |            427 |            343 |
+| Hypothetical MemOSTrack-384 + CE |                784 |            612 |            491 |            407 |
 
 This token-budget view explains why the two comparisons should be discussed
 separately. MemOSTrack-256 + CE has a 20 percent larger initial token sequence than
@@ -1475,11 +1261,6 @@ tokens were updated through a two-stage GRU mechanism. The sampler was rewritten
 produce ordered video sequences. The training pipeline was rewritten to use
 inference-like dynamic cropping. Auxiliary memory supervision and template blurring
 were studied as responses to memory underuse.
-
-These are meaningful engineering and research contributions. A bachelor thesis is not
-required to produce a new state-of-the-art tracker. It is required to formulate a
-problem, implement a solution, evaluate it, and analyze the outcome. This work satisfies
-that structure.
 
 ## 7.4 Limitations
 
@@ -1499,45 +1280,7 @@ between the main loss and memory loss is difficult and likely important. A sched
 memory loss or a warm-up phase may be more stable than applying the full auxiliary loss
 from the beginning.
 
-The fourth limitation is uncertainty in the exact training budget description. The final
-thesis must verify whether the available run corresponds to epochs, checkpoints, or
-optimizer iterations. This affects how strongly the result should be interpreted.
-
-## 7.5 Qualitative analysis that should accompany the final version
-
-In addition to the metric table, a final thesis submission should include qualitative
-examples. These examples do not need to prove that the proposed method is better; their
-purpose is to explain model behavior. Useful examples would include one sequence where
-MemOSTrack follows the target correctly, one sequence where it drifts, and one sequence
-where both OSTrack and MemOSTrack fail. For each example, the figure should show several
-frames with predicted and ground-truth boxes.
-
-The qualitative analysis should focus on memory-related questions. Does the tracker
-recover after partial occlusion? Does it follow the target when the appearance changes?
-Does it drift to a distractor after a wrong crop? Does template blurring make the
-tracker less stable in the first frames? These questions are more informative than
-simply showing successful frames.
-
-*Figure 7.2 - Qualitative example placeholder.*
-
-<table>
-<colgroup>
-<col style="width: 100%" />
-</colgroup>
-<thead>
-<tr class="header">
-<th><p>■</p>
-<p>Replace this placeholder with frames from one representative sequence.</p>
-<p>Show ground truth and predicted boxes over time.</p>
-<p>Use the caption to explain whether memory helped, failed, or behaved
-neutrally.</p></th>
-</tr>
-</thead>
-<tbody>
-</tbody>
-</table>
-
-## 7.6 Interpretation of the mixed result
+## 7.5 Interpretation of the mixed result
 
 The final result is neither a simple failure nor a general victory over OSTrack. It is
 positive relative to the same-resolution OSTrack-256 + CE baseline, where MemOSTrack is
@@ -1550,13 +1293,7 @@ not replace the accuracy benefit of the 384 search resolution. This distinction 
 important. It supports the memory hypothesis at the same resolution while avoiding the
 overstated claim that MemOSTrack is generally better than OSTrack.
 
-This also affects the writing style of the thesis. The thesis should avoid broad claims
-such as 'the proposed method outperforms OSTrack'. It should instead use precise phrases
-such as 'outperforms OSTrack-256 + CE', 'remains below OSTrack-384 + CE', and
-'investigates the effect of recurrent memory tokens'. That framing is scientifically
-accurate and appropriate for a bachelor thesis.
-
-## 7.7 Future work
+## 7.6 Future work
 
 Future work should begin with ablation experiments. The first ablation should compare
 baseline OSTrack, OSTrack with sequence training but no memory, MemOSTrack with static
@@ -1760,7 +1497,8 @@ transformer, inference-like training
 
 ## Appendix A: Suggested ablation table
 
-The following table should be filled if additional experiments are performed.
+Table B.1 summarizes ablations that would separate the effects of sequence training,
+dynamic cropping, memory tokens, template blurring, and auxiliary memory supervision.
 
 *Table B.1 - Suggested ablations.*
 
@@ -1796,13 +1534,3 @@ convert predicted box to image coordinates
 set tracker state to predicted box
 
 backpropagate accumulated sequence loss
-
-## Appendix C: Notes for final thesis completion
-
-Before final submission, the placeholder diagrams should be replaced by clean vector
-figures. The most important diagrams are the OSTrack baseline architecture, the
-MemOSTrack architecture, the two-stage GRU memory update, the sequence sampler, and
-dynamic search cropping. The phrase describing the training budget must also be checked
-against the training logs. If the run contains 58 epochs, the thesis should state 58
-epochs. If it contains 58 optimizer iterations, the result should be labeled
-preliminary.
