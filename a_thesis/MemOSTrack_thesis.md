@@ -88,7 +88,7 @@ The main contributions of the thesis are:
 
 # 1. Background and Related Work
 
-## 1.1 Single-object tracking
+## 1.1 Single-object tracking - Somewhat mannualy reviewed
 
 Single-object tracking is a sequential computer vision problem. In the first frame of a
 video, the target is identified by a bounding box. In later frames, the tracker predicts
@@ -139,7 +139,7 @@ before deep Siamese and transformer-based trackers became the dominant direction
 | Motion blur        | Fast motion or camera movement                   | Fine details disappear from the search crop.                       |
 | Out-of-view motion | Target leaves and returns                        | The tracker state may be corrupted during absence.                 |
 
-## 1.2 From Siamese trackers to transformer trackers
+## 1.2 From Siamese trackers to transformer trackers - Mannualy reviewed
 
 The state of the art in single-object tracking has largely focused on template-to-target
 matching, where the tracker relies on visual cues from two image regions: a template
@@ -195,66 +195,95 @@ Although DiMP-style trackers are architecturally different from OSTrack, they sh
 online adaptation and sequence-level information can improve tracking robustness. This
 motivates the idea of adding recurrent memory to a template-search transformer tracker.
 
-## 1.3 Template-search formulation
+## 1.3 Template and Search Crop Notation - Mannualy reviewd
 
-The most common notation in modern single-object tracking uses a template crop and a
-search crop. The template crop is usually denoted by z and is extracted from the first
-annotated frame. It contains the target object and a limited amount of surrounding
-context. The search crop is usually denoted by x_t and is extracted from the current
-frame around the expected target location. The tracker predicts the target box inside
-this search crop rather than inside the full image.
+This thesis follows the standard template-search notation used in many modern
+single-object trackers. The **template crop** is denoted by \(T\). It is extracted from
+the first annotated frame and contains the target object we are tracking.
+It is used to provide the visual description of the object that must be tracked.
 
-Search crops are used instead of full frames for both statistical and computational
-reasons. Statistically, the previous target position gives a useful prior: in short-term
-tracking the target is usually expected near its previous location, so there is no need
-to process the whole image at full resolution. Computationally, transformer-style
-attention is quadratic in the number of tokens \[21\]. If a 1920 by 1080 image is split
-into 16 by 16 patches, it contains roughly 120 by 68, or about 8160, tokens. A 256 by
-256 search crop with the same patch size contains only 16 by 16, or 256, tokens. The
-attention matrix for the full frame would have about 8160^2, or 66.6 million, pairwise
-interactions, while the search crop has 256^2, or 65 thousand. This is about a thousand
-times smaller before considering multiple layers, heads, and batch elements.
+The **search crop** at time \(t\) is denoted by \(S_t\). It is extracted from the
+current frame around the expected target location. Usually, a neural-network tracker does not process the full image directly.
+Instead, it receives a smaller resized crop around the expected target location.
+This location is usually estimated from the bounding-box prediction in the previous frame.
 
-For this reason, both the template and the search region are usually cropped and resized
-to fixed network input sizes. In this project, the template size is 128 and the search
-size is 256. Resizing makes batching possible and allows the tracker to use a fixed
-transformer architecture. It also means that all box predictions must be interpreted in
-the coordinate system of the resized crop and then converted back to original image
-coordinates.
+There are two main reasons what can help understand why a search crop is used instead of the whole image. First,
+it reduces computation by allowing the model to process only the region where the target
+is expected to appear. This is especially important for transformer-based trackers,
+because transformer-style attention is quadratic in the number of tokens [21]. For
+example, with \(16 \times 16\) patches, a \(256 \times 256\) search crop contains 256
+tokens, whereas a full HD frame would contain more than 8000 tokens. The corresponding
+attention matrix is therefore much smaller for the search crop than for the full image.
 
-In many trackers the template is cropped only at initialization and remains fixed during
-the sequence. Other trackers update or maintain an additional dynamic target
-representation during inference. FEAR \[14\], for example, uses a dual-template
-representation with dynamic template update to incorporate temporal information
-efficiently. DiMP \[18\] follows a different route: instead of simply storing a new
-template crop, it learns a discriminative target model from sequence information,
-including background evidence. These examples show that temporal information can be
-introduced at different points in the tracking pipeline. The memory mechanism in this
-thesis follows yet another route: it adds latent recurrent tokens directly inside the
-transformer token sequence.
+Second, the search crop provides a useful spatial prior. Since the crop is usually
+centered around the previous target bounding box, it gives the tracker information about
+where the target was located in the previous frame and what its approximate scale was.
+In short-term tracking, the target is usually expected to remain near its previous
+location, so a local search region is often sufficient. The tracker then predicts the
+new target box inside this resized crop, and the prediction is converted back to the
+coordinate system of the original image.
+
+In many trackers, the template is cropped only at initialization and remains fixed during
+the sequence. Other trackers update or maintain an additional target representation
+during inference. FEAR [14], for example, uses a dual-template representation for object
+model adaptation, where a dynamic template complements the initial template during
+tracking.
+
+In contrast, trackers such as OSTrack store only the initial template extracted from the
+first frame and do not maintain an explicit updated visual template during inference.
+This makes the tracker dependent on the initial target appearance. If the target rotates,
+deforms, changes illumination, or becomes partially occluded, the initial template may no
+longer describe the current appearance well. The proposed memory mechanism is designed to reduce this limitation. 
+MemOsTrack adds latent recurrent memory tokens inside the transformer
+token sequence. These memory tokens are intended to store additional temporal cues about
+the changing target appearance.
+```md
+
 
 ## 1.4 Evaluation metrics and common benchmarks
 
-The most important localization measure in this thesis is intersection over union (IoU),
-also called overlap. For a predicted box and a ground-truth box, IoU is the area of
-their intersection divided by the area of their union. A value of 1 means perfect
+Because single-object tracking is a widely studied problem, it has established
+benchmarks and evaluation metrics. These benchmarks make it possible to compare trackers
+under a common protocol, using the same test sequences and the same localization
+measures.
+
+In this thesis, the main benchmark is GOT-10k. GOT-10k is a generic object tracking
+benchmark designed to evaluate how well a tracker generalizes to unseen object classes
+[20]. It follows a one-shot tracking protocol: the target is specified by a bounding box
+in the first frame, and the tracker must localize the same object in the remaining
+frames. The test annotations are hidden, so final results are obtained through the
+official evaluation server.
+
+The standard localization measure used in these evaluations is intersection over union
+(IoU), also called overlap. For a predicted box and a ground-truth box, IoU is the area
+of their intersection divided by the area of their union. A value of 1 means perfect
 overlap, while a value of 0 means that the boxes do not overlap.
 
-*IoU(B\_{pred}, B\_{gt}) = \|B\_{pred} ∩ B\_{gt}\| / \|B\_{pred} ∪ B\_{gt}\|.*
+$$
+\operatorname{IoU}(B_{\text{pred}}, B_{\text{gt}})
+=
+\frac{|B_{\text{pred}} \cap B_{\text{gt}}|}
+{|B_{\text{pred}} \cup B_{\text{gt}}|}
+$$
 
-GOT-10k commonly reports Average Overlap (AO), SR0.50, and SR0.75 \[20\]. AO is the
-average overlap over evaluated frames. SR0.50 is the proportion of frames whose overlap
-is above 0.50, and SR0.75 is the proportion of frames whose overlap is above 0.75.
-SR0.75 is stricter and is more sensitive to precise localization errors. These metrics
-are useful together because a tracker may have reasonable coarse localization but lower
-precise localization.
+GOT-10k commonly reports Average Overlap (AO), SR0.50, and SR0.75 [20]. AO is computed
+as the average IoU over all evaluated frames:
 
-GOT-10k is a suitable benchmark for this thesis because it was designed for generic
-object tracking and uses a one-shot protocol with separated training and testing object
-classes \[20\]. This makes it harder to overfit to a fixed set of categories. A model
-must learn a general tracking rule rather than a closed-set detector. The experiments in
-this thesis use exactly these metrics and compare the proposed tracker with reported
-OSTrack-256 + CE and OSTrack-384 + CE results.
+$$
+\operatorname{AO}
+=
+\frac{1}{N}
+\sum_{i=1}^{N}
+\operatorname{IoU}(B^{i}_{\text{pred}}, B^{i}_{\text{gt}}).
+$$
+
+SR0.50 is the proportion of frames whose overlap is at least 0.50, while SR0.75 is the
+proportion of frames whose overlap is at least 0.75. SR0.75 is stricter and is more
+sensitive to precise localization errors. These metrics are useful together because a
+tracker may localize the target approximately while still producing less accurate
+bounding boxes.
+```
+
 
 ## 1.5 Transformers, GRUs, and backpropagation through time
 
@@ -379,7 +408,7 @@ naming convention; the actual configured crop sizes are the template and search 
 stated here. With the ViT-B/16 patch size, these crops correspond to 64 template tokens
 and 256 search tokens. The 256-pixel search resolution, ViT-B/16 backbone family, and
 CE-enabled token-pruning mechanism make this configuration the closest direct comparison
-to the reported OSTrack-256 + CE baseline.
+to OSTrack-256 + CE from an architectural point of view.
 
 It is also important that OSTrack uses a pretrained ViT backbone. The original OSTrack
 paper shows that backbone initialization has a significant effect on tracking
@@ -395,8 +424,8 @@ the existing OSTrack architecture rather than as a completely new feature extrac
 
 The main same-resolution baseline in this thesis is OSTrack-256 + CE. This baseline is
 the closest comparison because it uses the same search resolution, the same ViT-B/16
-backbone family, and the same CE-enabled pruning mechanism. OSTrack-384 + CE is also
-reported later as a stronger high-resolution reference.
+backbone family, and the same CE-enabled pruning mechanism. This makes the
+configuration architecturally aligned with OSTrack-256 + CE.
 
 ## 2.3 Candidate elimination
 
@@ -461,10 +490,6 @@ box in the search crop. The model predicts \(\hat{B}_t\), and the loss compares 
 \(B_t\). This setup is sufficient for a memory-free tracker because each training
 sample can be processed independently and no recurrent state has to be propagated from
 previous search frames.
-
-For the GOT-10k one-shot protocol, the reported OSTrack results are obtained under the
-GOT-10k training-only setting. This is the relevant protocol for the comparison used in
-this thesis.
 
 ## 2.5 Limitations of pair-based tracking for memory
 
@@ -922,10 +947,9 @@ train a recurrent memory module, the memory should be exposed to realistic input
 Otherwise, the memory may learn to work only in an idealized setting where every frame
 is perfectly centered.
 
-This trade-off is important for interpreting the final results. MemOSTrack improves over
-the same-resolution OSTrack-256 + CE baseline, but remains below the higher-resolution
-OSTrack-384 + CE baseline. The more demanding training pipeline may have affected
-optimization, but this cannot be isolated without ablation experiments.
+This trade-off is important when interpreting the final evaluation. A harder training
+pipeline may improve realism while also making optimization more difficult, so its
+effect should be separated by ablation experiments.
 
 # 5. Auxiliary Memory Supervision
 
@@ -1163,11 +1187,9 @@ objective.
 The experiments are performed on the GOT-10k dataset. GOT-10k is a generic object
 tracking benchmark with more than 10,000 video segments and more than 1.5 million
 labeled bounding boxes [20]. The test annotations are hidden, and evaluation is
-performed through the official benchmark server. The OSTrack paper reports GOT-10k
-performance for several configurations, including OSTrack-256 + CE and OSTrack-384 + CE
-[13]. The tracking training in this thesis uses GOT-10k only, without additional
-tracking datasets. The backbone is initialized from an MAE-pretrained ViT checkpoint,
-following the OSTrack configuration.
+performed through the official benchmark server. The tracking training in this thesis
+uses GOT-10k only, without additional tracking datasets. The backbone is initialized
+from an MAE-pretrained ViT checkpoint, following the OSTrack configuration.
 
 ## 6.2 Model configuration
 
@@ -1190,12 +1212,12 @@ reasonable to use different optimizer parameter groups. The backbone can be trai
 a conservative learning rate, while memory-specific parameters can receive a separately
 controlled learning rate.
 
-This distinction was important in the project because memory-specific parameters such as
-backbone.mem\_ and backbone.read_mem_embed had to be detected and grouped correctly. If
-they were accidentally treated as ordinary pretrained backbone parameters, they might
-receive a learning rate too small for new modules. If they were treated too
-aggressively, they could destabilize the backbone. The correct choice is an empirical
-hyperparameter, but the optimizer must at least expose the distinction.
+This distinction was important in the project because the newly introduced memory
+tokens, recurrent update modules, and memory-read embeddings had to be detected and
+grouped correctly. If they were accidentally treated as ordinary pretrained backbone
+parameters, they might receive a learning rate too small for new modules. If they were
+treated too aggressively, they could destabilize the backbone. The correct choice is an
+empirical hyperparameter, but the optimizer must at least expose the distinction.
 
 Gradient clipping is another relevant hyperparameter. Recurrent sequence training
 accumulates losses over multiple frames and backpropagates through a memory chain.
@@ -1206,10 +1228,8 @@ recurrent parameters are trained together with a pretrained transformer backbone
 
 ## 6.4 Evaluation protocol
 
-The tracker is evaluated by producing predicted bounding boxes for the test sequences
-and computing AO, SR0.50, and SR0.75. AO measures average localization overlap. SR0.50
-measures the fraction of frames where the tracker achieves at least moderate overlap.
-SR0.75 measures the fraction of frames where the tracker achieves high overlap.
+The tracker is evaluated on GOT-10k using AO, SR0.50, and SR0.75, as defined in
+Section 1.4.
 
 The comparison is made against reported OSTrack-256 + CE and OSTrack-384 + CE
 baselines. The 256 baseline is the closest architectural comparison because it uses the
@@ -1314,7 +1334,7 @@ transformer block contains 384 tokens.
 The OSTrack-384 baseline uses a 192 x 192 template and a 384 x 384 search region. This
 produces 144 template tokens and 576 search tokens, or 720 visual tokens before
 candidate elimination. The same count can be derived exactly for the MemOSTrack
-implementation if it is applied at this resolution with `MODEL.MEMORY.NUM_TOKENS = 64`:
+implementation if it is applied at this resolution with the same 64-token memory state:
 the initial sequence would contain 144 template tokens, 576 search tokens, and 64 memory
 tokens, for a total of 784 tokens. This MemOSTrack-384 count is a derived token budget,
 not a trained or evaluated model result in this thesis.
@@ -1328,14 +1348,14 @@ not a trained or evaluated model result in this thesis.
 | OSTrack-384 + CE                 |                 144 |               576 |                 0 |                720 |
 | MemOSTrack-384 + CE, derived     |                 144 |               576 |                64 |                784 |
 
-Candidate elimination changes the active sequence length inside the backbone. In
-`vit_ce.py`, CE is applied at the configured zero-based block indices 3, 6, and 9. The
-implementation computes the number of retained search tokens as
-`ceil(keep_ratio * current_search_tokens)`. With the configured keep ratio of 0.7 at
-all three CE locations, the 256 search stream is reduced from 256 tokens to 180, then
-126, then 89. The 384 search stream is reduced from 576 tokens to 404, then 283, then
-199. Template tokens are not pruned. In MemOSTrack, memory tokens are prepended to the
-template-side sequence for attention and are also kept across CE; however, they are
+Candidate elimination changes the active sequence length inside the backbone. In the
+implementation, CE is applied at three transformer blocks. The number of retained search
+tokens is computed by rounding up the product of the current search-token count and the
+configured keep ratio. With the configured keep ratio of 0.7 at all three CE locations,
+the 256 search stream is reduced from 256 tokens to 180, then 126, then 89. The 384
+search stream is reduced from 576 tokens to 404, then 283, then 199. Template tokens are
+not pruned. In MemOSTrack, memory tokens are prepended to the template-side sequence for
+attention and are also kept across CE; however, they are
 excluded from the template mask used to score search-token importance.
 
 *Table 7.3 - Active token counts after CE pruning.*
@@ -1358,12 +1378,12 @@ depends on layer depth, attention heads, CE locations, and implementation detail
 
 ## 7.4 What worked technically
 
-In addition to the quantitative improvement over OSTrack-256 + CE, several technical
-goals were achieved. The architecture was modified to include memory tokens. The memory
-tokens were updated through a two-stage GRU mechanism. The sampler was rewritten to
-produce ordered video sequences. The training pipeline was rewritten to use
-inference-like dynamic cropping. Auxiliary memory supervision and template blurring
-were studied as responses to memory underuse.
+Several technical goals were achieved in addition to the final benchmark result. The
+architecture was modified to include memory tokens. The memory tokens were updated
+through a two-stage GRU mechanism. The sampler was rewritten to produce ordered video
+sequences. The training pipeline was rewritten to use inference-like dynamic cropping.
+Auxiliary memory supervision and template blurring were studied as responses to memory
+underuse.
 
 ## 7.5 Limitations
 
@@ -1441,13 +1461,11 @@ to reduce over-reliance on the clean initial template and encourage use of recur
 memory.
 
 The final MemOSTrack-256 + CE model achieved AO 0.729, SR0.50 0.823, and SR0.75
-0.693. These results are above the reported OSTrack-256 + CE baseline of AO 0.710,
-SR0.50 0.804, and SR0.75 0.682, giving improvements of 0.019 AO, 0.019 SR0.50, and
-0.011 SR0.75. However, the model remains below the stronger OSTrack-384 + CE baseline
-of AO 0.737, SR0.50 0.832, and SR0.75 0.708. Therefore, the final configuration improves the same-resolution 256 CE setting, but it
-does not outperform the higher-resolution 384 CE model. The result provides a useful foundation for future work on memory
-supervision, update mechanisms, resolution scaling, and training curricula for
-transformer-based visual tracking.
+0.693. This improves on the reported same-resolution OSTrack-256 + CE baseline, but it
+does not outperform the stronger higher-resolution OSTrack-384 + CE baseline. The
+result provides a useful foundation for future work on memory supervision, update
+mechanisms, resolution scaling, and training curricula for transformer-based visual
+tracking.
 
 # References
 
@@ -1593,4 +1611,3 @@ candidate elimination, and resolution.
 | SOT              | Single-Object Tracking            | Tracking one specified object through a video                   |
 | SR               | Success Rate                      | Fraction of frames above an IoU threshold                       |
 | ViT              | Vision Transformer                | Transformer model applied to image patches                      |
-
