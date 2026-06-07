@@ -1575,8 +1575,7 @@ does not yet surpass the higher-resolution 384 CE model. Further optimization an
 ablation studies are required to separate the effects of memory, dynamic cropping,
 candidate elimination, and resolution.
 
-Keywords: visual object tracking, OSTrack, memory tokens, recurrent neural network, GRU,
-transformer, inference-like training
+
 
 # Abbreviations
 
@@ -1595,44 +1594,3 @@ transformer, inference-like training
 | SR               | Success Rate                      | Fraction of frames above an IoU threshold                       |
 | ViT              | Vision Transformer                | Transformer model applied to image patches                      |
 
-# Appendix
-
-## Appendix A: Suggested ablation table
-
-Table A.1 summarizes ablations that would separate the effects of sequence training,
-dynamic cropping, memory tokens, template blurring, and auxiliary memory supervision.
-
-*Table A.1 - Suggested ablations.*
-
-| **Experiment**              | **Memory tokens** | **Dynamic cropping** | **Template blur** | **Memory loss** | **AO** | **SR0.50** | **SR0.75** |
-|-----------------------------|-------------------|----------------------|-------------------|-----------------|--------|------------|------------|
-| Baseline OSTrack-256 + CE   | No                | No                   | No                | No              | 0.710  | 0.804      | 0.682      |
-| Baseline OSTrack-384 + CE   | No                | No                   | No                | No              | 0.737  | 0.832      | 0.708      |
-| Sequence-only control       | No                | Yes/No               | No                | No              | TBD    | TBD        | TBD        |
-| MemOSTrack without blur     | Yes               | Yes                  | No                | No              | TBD    | TBD        | TBD        |
-| MemOSTrack with blur        | Yes               | Yes                  | Yes               | No/Yes          | TBD    | TBD        | TBD        |
-| MemOSTrack with memory loss | Yes               | Yes                  | Optional          | Yes             | TBD    | TBD        | TBD        |
-
-## Appendix B: Minimal pseudocode for dynamic training
-
-initialize template from first frame
-
-initialize tracker state from first ground-truth box
-
-initialize memory tokens
-
-for each search frame in the sampled sequence:
-
-crop search region around current tracker state
-
-run MemOSTrack on template, search crop, and memory
-
-compute tracking loss against current ground-truth box
-
-update memory tokens
-
-convert predicted box to image coordinates
-
-set tracker state to predicted box
-
-backpropagate accumulated sequence loss
