@@ -78,7 +78,7 @@ carry useful temporal information.
 
 The main contributions of the thesis are:
 
-- introduction of recurrent memory tokens into the OsTrack ViT backbone;
+- introduction of recurrent memory tokens into the OSTrack ViT backbone;
 - implementation of a two-stage GRU memory update;
 - rewriting of the training sampler for ordered video sequences;
 - implementation of inference-like dynamic search cropping;
@@ -234,11 +234,9 @@ first frame and do not maintain an explicit updated visual template during infer
 This makes the tracker dependent on the initial target appearance. If the target rotates,
 deforms, changes illumination, or becomes partially occluded, the initial template may no
 longer describe the current appearance well. The proposed memory mechanism is designed to reduce this limitation. 
-MemOsTrack adds latent recurrent memory tokens inside the transformer
+MemOSTrack adds latent recurrent memory tokens inside the transformer
 token sequence. These memory tokens are intended to store additional temporal cues about
 the changing target appearance.
-```md
-
 
 ## 1.4 Evaluation metrics and common benchmarks
 
@@ -282,43 +280,8 @@ proportion of frames whose overlap is at least 0.75. SR0.75 is stricter and is m
 sensitive to precise localization errors. These metrics are useful together because a
 tracker may localize the target approximately while still producing less accurate
 bounding boxes.
-```
 
-
-## 1.5 Transformers, GRUs, and backpropagation through time
-
-This section is included because the proposed architecture combines two modeling ideas
-that are usually discussed separately. Transformers model relationships among tokens
-through attention. A vision transformer splits an image into patches, embeds those
-patches as tokens, and processes the token sequence with transformer blocks \[22\].
-OSTrack builds on this idea by treating template and search image patches as tokens and
-processing them jointly.
-
-Recurrent neural networks provide a different kind of sequence modeling. A GRU is a
-gated recurrent unit designed to control how much previous state is kept and how much
-new input is accepted \[23\]. The GRU is simpler than a long short-term memory unit but
-still includes gates that regulate information flow. For tracking, this is appealing
-because a memory representation should not be replaced blindly at every frame. Some
-target information should be preserved, while outdated or corrupted information should
-be discarded.
-
-Training a recurrent tracker also introduces backpropagation through time (BPTT). If the
-tracker is unrolled over a sequence of frames, the loss at a later frame depends on the
-memory states produced at earlier frames. Gradients therefore flow backward not only
-through layers, but also through time. Full BPTT over an entire video can be expensive
-and unstable, so practical training often uses a fixed sampled sequence length. In this
-project, the initial training setup used rollouts of 20 search frames, which can be
-interpreted as a truncated BPTT setting: the model learns from temporal dependencies
-inside the sampled window, while memory is reset at sequence boundaries. In later
-training stages, the rollout length was reduced to 15 search frames to lower the memory
-and optimization cost of recurrent training.
-
-The combination used in this thesis is motivated by the sequential nature of tracking
-and the token-based structure of transformer trackers. A transformer backbone performs
-token-level feature interaction, while a GRU-based module updates explicit memory tokens
-across frames and layers.
-
-## 1.6 Motivation for temporal memory
+## 1.5 Motivation for temporal memory
 
 A single image is sometimes not enough to recognize or localize an object reliably. In
 video, motion can reveal structure that is almost invisible in a static frame. A
@@ -348,8 +311,7 @@ updated after each frame and passed forward. In principle, it can summarize usef
 information while discarding irrelevant details. The challenge is that this summary must
 be learned. If the memory update is too aggressive, the tracker may store distractor
 information after a wrong prediction. If it is too conservative, the memory will not
-adapt. The two-stage GRU used in this thesis is an attempt to update memory through
-gates rather than direct replacement.
+adapt. This motivates a controlled memory-update mechanism rather than direct replacement.
 
 # 2. OSTrack Baseline
 
@@ -702,8 +664,14 @@ memory state.
 
 ## 3.4 Variant B: GRU-based memory update and two-stage architecture
 
-The second experiment adds a gated recurrent update to the memory stream. In
-this version, the transformer layer does not directly produce the final memory.
+The second experiment adds a gated recurrent update to the memory stream. A gated
+recurrent unit (GRU) is a recurrent module that updates a hidden state using learned
+gates [23]. These gates control how much previous state is preserved and how much new
+information is accepted. This is useful for memory tokens because the tracker should
+retain reliable target information while still adapting when the target appearance
+changes.
+
+In this version, the transformer layer does not directly produce the final memory.
 Instead, it produces a candidate memory value:
 
 $$
