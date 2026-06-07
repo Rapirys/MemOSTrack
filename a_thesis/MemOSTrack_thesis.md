@@ -264,7 +264,7 @@ $$
 {|B_{\text{pred}} \cup B_{\text{gt}}|}
 $$
 
-GOT-10k commonly reports Average Overlap (AO), SR0.50, and SR0.75 [20]. AO is computed
+GOT-10k reports Average Overlap (AO), SR0.50, and SR0.75 [20]. AO is computed
 as the average IoU over all evaluated frames:
 
 $$
@@ -283,35 +283,39 @@ bounding boxes.
 
 ## 1.5 Motivation for temporal memory
 
-A single image is sometimes not enough to recognize or localize an object reliably. In
-video, motion can reveal structure that is almost invisible in a static frame. A
-camouflaged animal may be hard to distinguish from the background until it moves. A thin
-object, such as a snake in grass, may be visually ambiguous in one frame but becomes
-recognizable when its position changes coherently over several frames. A target that is
-partly hidden in the current frame may still be identifiable because it was clearly
-visible a few frames earlier.
+The motivation for adding temporal memory to a tracker comes from several limitations
+of using only the initial template and the current search crop. First, the initial
+template becomes less reliable as the video progresses. It captures the target only in
+the first frame, while the target may later rotate, deform, change illumination, change
+scale, or become temporarily occluded. The current search crop can also be unreliable:
+the object may be blurred, partly hidden, or surrounded by visually similar distractors.
+In such cases, a tracker needs a mechanism that can dynamically encode the most relevant
+appearance cues from previous frames instead of relying only on the first template.
 
-The initial template is a strong identity cue, but it captures only one appearance of
-the target. During a video, the target may rotate, become brighter or darker, change
-scale, deform, or become partially occluded. A memory stream can store evidence from
-later frames and may represent recent target appearance better than the initial template
-alone. This is the intuitive reason to add temporal memory to a tracker.
+Second, tracking is inherently temporal. A simple thought experiment makes this clear would be to 
+imagine looking at a single frame of grass and trying to identify a camouflaged snake.
+In that one image, the snake may be almost indistinguishable from the background,
+however, once the video starts playing, coherent movement across consecutive frames can
+make the same object visible. The object has not necessarily changed its appearance, but
+the temporal context makes it easier to separate from the background. Additionally, a temporal memory can potentially encode motion cues. A memory state does not need
+to store only appearance; it can also learn information about recent target movement,
+direction, speed, and stable object identity across frames. This can be useful when the
+current frame is ambiguous, because the previous trajectory and recent observations can
+provide additional evidence about where the target is likely to be.
 
-A naive solution would be to pass all previous frame tokens to the transformer together
-with the current search crop. This is usually impractical. If one search crop contains
-256 tokens, then 20 frames contain 5120 tokens before adding template tokens. Attention
-over 5120 tokens requires about 26 million pairwise token interactions per layer. A
-single-frame search crop requires only about 65 thousand interactions. Therefore, full
-video-token attention over even a short sequence is roughly 400 times larger than one
-search crop. If full-resolution frames were used, the cost would be much higher.
+A simple way to use temporal information would be to provide the transformer with tokens
+from previous frames together with the current search crop. However, this quickly leads
+to a temporal token explosion. For example, if one search crop contains 256 tokens, then for just
+20 previous search crops already contain 5120 tokens before adding template tokens. Even
+if previous-frame key-value representations are cached, the
+current frame must still attend to a growing set of stored tokens, increasing both memory
+usage and attention cost.
 
-Memory tokens offer a compact alternative. Instead of storing every patch token from
-every previous frame, the model keeps a small learned latent state. This state is
-updated after each frame and passed forward. In principle, it can summarize useful
-information while discarding irrelevant details. The challenge is that this summary must
-be learned. If the memory update is too aggressive, the tracker may store distractor
-information after a wrong prediction. If it is too conservative, the memory will not
-adapt. This motivates a controlled memory-update mechanism rather than direct replacement.
+Therefore, instead of storing all previous visual tokens, an efficient tracker requires
+a reliable mechanism for dynamically maintaining a compressed hidden state. Such a state
+should preserve useful temporal cues from previous frames while keeping computation
+bounded as the sequence length increases.
+
 
 # 2. OSTrack Baseline
 
