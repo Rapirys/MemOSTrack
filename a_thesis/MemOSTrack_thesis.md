@@ -440,231 +440,153 @@ attention, but they are not used to score search candidates and are not removed 
 Thus, candidate elimination keeps its original role of pruning search-region candidates,
 while the recurrent memory stream remains available throughout the backbone.
 
-## 2.4 Standard OSTrack training
-
-Standard pair-based tracking training samples a template frame and a search frame from a
-video. The template crop is centered around the target in the template frame, and the
-search crop is usually centered around the target in the search frame. The model is
-trained to predict the target box inside the search crop.
-
-\[
-\text{sample} = (z, x_t, B_t), \qquad \hat{B}_t = f(z, x_t).
-\]
-
-Here, \(z\) is the template crop, \(x_t\) is the search crop, and \(B_t\) is the target
-box in the search crop. The model predicts \(\hat{B}_t\), and the loss compares it with
-\(B_t\). This setup is sufficient for a memory-free tracker because each training
-sample can be processed independently and no recurrent state has to be propagated from
-previous search frames.
-
-## 2.5 Limitations of pair-based tracking for memory
-
-Pair-based training creates a mismatch for recurrent memory modules. If the model has a
-memory state \(M_t\), then the value of this state should come from previous frames in
-the same video. A random template-search pair does not provide a meaningful previous
-state. Resetting memory for every pair would make the memory branch nearly useless,
-while carrying memory across unrelated samples would be incorrect.
-
-Pair-based sampling also hides some inference difficulties. In training, the search crop
-is often centered using the ground-truth box of the current search frame. In inference,
-however, the tracker does not know the current ground truth. It crops the next search
-region using the previous predicted location. This means that errors can accumulate. A
-model trained only on ground-truth-centered crops may be less prepared for drift during
-inference.
-
-These two limitations motivated the training-pipeline changes described in Chapter 4.
-Therefore, the architectural modification also required a corresponding change in the
-training procedure.
-
 # 3. Proposed Memory-Augmented OSTrack
 
-## 3.1 Motivation and controlled scope
+## 3.1 Memory-token design motivation
 
-The proposed model adds explicit memory tokens to OSTrack. The motivation is
-that tracking is not only a matching problem between the first template and the
-current search crop. It is also a temporal problem. The target observed in
-recent frames may contain information that is absent from the initial template,
-especially after viewpoint changes, deformation, illumination changes, or
-partial occlusion.
+MemOSTrack extends OSTrack by adding explicit memory tokens to the transformer backbone.
+These memory tokens are inserted into the same token sequence as the template
+and search image feature embeddings, so they participate in ViT attention together with the visual
+tokens. However, unlike template and search tokens, memory tokens are latent hidden-state vectors
+rather than image patches, and they are carried across frames during tracking.
 
-Memory tokens are a natural extension for a transformer tracker because OSTrack
-already represents the template and search images as token sequences. The memory
-tokens are not image patches. They are latent vectors with the same embedding
-dimension as the ordinary transformer tokens, so they can be concatenated with
-search and template tokens and processed by the same attention layers.
+This design allows the ViT backbone to continuously read from and refine the memory representation
+through attention. Visual tokens can interact with memory tokens while the current
+template and search features are processed, and the resulting memory representation can
+store information that may be useful in later frames. 
 
-The implementation deliberately keeps the scope controlled. The patch embedding,
-main OSTrack backbone structure, and main prediction head are kept close to the
-baseline. This is important for interpretation. If the backbone, prediction
-head, loss, sampler, and memory mechanism were all replaced at the same time,
-it would be difficult to know which change caused the final behavior.
+The architectural changes are mainly applied inside the backbone. The patch embedding
+and OSTrack prediction head are kept close to the baseline implementation, so the model
+remains an OSTrack-style tracker with an added recurrent memory stream.
 
-Two architectural variants were explored. The first variant adds memory tokens
-without an explicit recurrent gate. This tests the minimal change needed to add
-a memory stream to OSTrack. The second variant adds a GRU-based update, which
-was introduced after the first variant revealed that direct memory replacement
-is not controlled enough for a recurrent tracker.
+## 3.2 Direct transformer-based memory update
 
-## 3.2 Variant A: Direct memory update by the ViT layer
+The first architectural variant adds memory tokens to the OSTrack backbone and lets the
+ViT layers update them directly. In this version, memory tokens are concatenated with
+the template and search tokens and are processed by the same transformer layers as the
+visual tokens. The goal is to test whether the existing transformer operations,
+including self-attention, residual connections, and feed-forward layers, are sufficient
+to learn a useful memory update strategy.
 
-The first experiment was the simplest memory-augmented version of OSTrack. In
-this variant, memory tokens are added to the transformer token sequence and are
-updated directly by the same ViT layer that processes the search and template
-tokens. The purpose of this variant was to test whether ordinary
-self-attention, residual connections, and feed-forward transformations are
-already sufficient to maintain a useful memory state.
-
-At frame `t` and layer `l`, the token sequence is written as:
+In the direct transformer-based update, each ViT layer produces transformed search,
+template, and memory tokens in a single forward pass:
 
 $$
-Y_{t,l} = \left[ S_{t,l}, T_{t,l}, M_{t,l} \right].
-$$
-
-Here, $S_{t,l}$ denotes the search tokens, $T_{t,l}$ denotes the template
-tokens, and $M_{t,l}$ denotes the memory tokens after layer $l$ while processing
-frame $t$. The mathematical notation keeps the search-template-memory order for
-clarity, even if the implementation prepends memory tokens before visual tokens.
-All three token groups have the same embedding dimension, so they can be
-concatenated along the token dimension and passed through the same transformer
-block.
-
-The main token shapes used in the architecture are:
-
-| **Symbol** | **Meaning**    | **Shape**               |
-|------------|----------------|-------------------------|
-| $S_{t,l}$  | Search tokens  | $B \times N_s \times D$ |
-| $T_{t,l}$  | Template tokens | $B \times N_t \times D$ |
-| $M_{t,l}$  | Memory tokens  | $B \times N_m \times D$ |
-
-Here, $B$ is batch size, $N_s$ is the number of search tokens, $N_t$ is the number of
-template tokens, $N_m$ is the number of memory tokens, and $D$ is the token dimension.
-The memory tokens are non-spatial tokens. Unlike template and search tokens, they do
-not receive resized ViT patch-position embeddings. Instead, the model uses a learned
-initial memory state and a learned memory-read embedding. 
-The memory-read embedding is added once when memory is read into the backbone for
-a frame. It is therefore better interpreted as a learned memory-token type or read
-offset than as an image-space positional embedding.
-
-In the direct-update variant, the ViT layer itself produces the next search,
-template, and memory tokens:
-
-$$
-\left[ S_{t,l}, T_{t,l}, M_{t,l} \right]
+[S_{t,l}, T_{t,l}, M_{t,l}]
 =
 \operatorname{ViTLayer}_l
 \left(
-\left[ S_{t,l-1}, T_{t,l-1}, M_{t,l-1} \right]
+[S_{t,l-1}, T_{t,l-1}, M_{t,l-1}]
 \right).
 $$
 
-In this equation, $M_{t,l-1}$ is the memory input from the previous transformer
-layer in the current frame, and $M_{t,l}$ is the memory output produced directly
-by the ViT layer. After the frame is processed, the resulting layer-wise memory
-states are stored and used as the previous-frame memory when the next video
-frame is processed. This gives the model a recurrent path through the video, but
-the update itself is still only the ordinary transformer output. There is no
-explicit gate that decides how much old memory should be preserved.
+Here:
 
-![Direct memory-token update without GRU.](memostrack_backbone_layers_no-gru.png)
+- \(S_{t,l}\) denotes the search tokens after layer \(l\) while processing frame \(t\);
+- \(T_{t,l}\) denotes the template tokens after layer \(l\) while processing frame \(t\);
+- \(M_{t,l-1}\) is the memory input from the previous transformer layer in the current
+  frame;
+- \(M_{t,l}\) is the memory output produced directly by the ViT layer.
 
-*Figure 3.1 - Direct memory-token update inside the backbone without an explicit recurrent gate.*
+All token groups have the same embedding dimension \(D\), so they can be concatenated
+along the token dimension and processed by the same transformer block.
 
-This variant is useful because it isolates the effect of adding memory tokens
-and letting the existing transformer machinery update them. It does not
-introduce a separate recurrent update rule. If this variant had worked well, the
-conclusion would have been that self-attention over memory tokens is sufficient
-to create a useful recurrent state.
+For the first frame of a sequence, no previous memory state exists. The model therefore
+uses a learned initial memory state. Then, after each frame has been processed, the backbone
+returns an updated memory state in the auxiliary output. 
+This updated memory state is then provided to the backbone when processing the next
+search frame, together with the template and the next search crop.
 
-## 3.3 Limitation of direct memory replacement
+To distinguish memory tokens from visual tokens, the model adds a learned memory-token
+type embedding to the memory tokens before they are processed by the backbone. This
+embedding shifts the memory tokens in feature space and gives the transformer a learned
+signal that these prefix tokens represent memory states rather than image patches.
 
-The first variant exposed two separate limitations. The first limitation is the
-lack of a dedicated memory gate. A ViT block updates tokens through
-self-attention, residual connections, normalization, and a feed-forward network.
-This is a powerful feature transformation, but it is not the same as a
-recurrent memory update. In the implementation, memory tokens are placed before
-the visual tokens when a transformer block is called. If `V_{t,l-1}` denotes the
-ordinary visual tokens after template-search concatenation, the input to layer
-`l` is:
+In the CE-enabled backbone, memory tokens are intentionally excluded from
+candidate-elimination decisions. First, they are not pruned, because CE removes only
+search tokens. Second, they are excluded from the template mask used for CE scoring, so
+they do not directly influence which search tokens are kept or removed. Thus CE pruning is decided without
+treating them as either removable candidates or scoring tokens, so memory
+tokens can only influence it indirectly through the participation in the transformer attention.
 
-$$
-X_{t,l-1} = \left[ M^{in}_{t,l-1}, V_{t,l-1} \right].
-$$
+![Direct transformer-based memory update.](memostrack_backbone_layers_no-gru.png)
 
-The ViT block itself follows the pre-normalization residual form used in
-`vit.py`:
+*Figure 3.1 - Direct transformer-based memory update. The template and search images are
+first converted into visual tokens by tokenization and linear projection. A learned
+initial memory state, or the memory state returned from the previous frame, is inserted
+into the transformer token sequence. Each ViT layer jointly processes search, template,
+and memory tokens through self-attention. The updated memory state is passed through the
+backbone and returned for use in the next frame, while the final visual tokens are
+reshaped and passed to the OSTrack prediction head.*
 
-$$
-\begin{aligned}
-U_{t,l}
-&=
-X_{t,l-1}
 
-+ \operatorname{DropPath}_l(
-  \operatorname{Attn}_l(
-  \operatorname{LN}_{1,l}(X_{t,l-1})
-  )
-  ), \\
-  X_{t,l}
-  &=
-  U_{t,l}
-+ \operatorname{DropPath}_l(
-  \operatorname{MLP}_l(
-  \operatorname{LN}_{2,l}(U_{t,l})
-  )
-  ).
-  \end{aligned}
-  $$
+## 3.3 Limitations of direct memory update
 
-After this block, the first `K` tokens are split out as the memory candidate:
+The direct-update variant exposes two fundamental limitations regarding long-term
+temporal modeling. While the standard Vision Transformer architecture is effective for
+spatial feature extraction and template-search matching, relying on it alone for
+recurrent memory updates is insufficient.
+
+The first limitation is the lack of explicit gating for memory preservation. In the
+direct variant, memory tokens are updated by the same transformer block as the visual
+tokens. For a standard pre-normalization transformer layer, the output of the attention
+sublayer is defined by a residual connection:
 
 $$
-\left[ \hat{M}_{t,l}, V_{t,l} \right]
-= \operatorname{split}(X_{t,l}).
+X'_l =
+X_{l-1}
++
+\operatorname{MSA}
+\left(
+\operatorname{LN}(X_{l-1})
+\right).
 $$
 
-In the direct no-GRU path, this candidate is normalized and carried forward:
+Here, \(X_{l-1}\) represents the input token sequence, including search, template, and
+memory tokens. \(\operatorname{LN}(\cdot)\) denotes Layer Normalization, and
+\(\operatorname{MSA}(\cdot)\) denotes Multi-Head Self-Attention.
 
+While the attention mechanism is effective for determining which visual tokens should
+influence the memory state, it does not provide a dedicated mechanism for controlling
+how much of the existing memory should be preserved. The residual connection described
+by the equation above can carry the previous token representation forward. However, it
+adds the previous token representation and the new attention update without explicitly
+deciding how much each should contribute.
+Over long tracking sequences of tens or hundreds of frames, the lack of explicit gating can become a limitation. In the
+direct-update variant, repeated ungated updates risk gradually making the memory state
+drift or become less representative of the target.
+
+The second limitation is the susceptibility to gradient explosion or vanishing during Backpropagation Through Time 
+due to an absence of temporal skip connections. In recurrent neural networks, we often have temporal skip connections 
+between the memory representations of the same layer across time. However, in our direct-update design, recurrence is 
+present only in the form of a feedback loop, where the last layer of the current frame is connected to the first layer 
+of the next frame. This means that when unrolling the memory tokens over $T$ frames through an $L$-layer backbone, 
+the gradient has to travel through all layers of the backbone for each frame:
+
+$$ 
+\frac{\partial L_T}{\partial M_1} = \frac{\partial L_T}{\partial M_T} \prod_{t=2}^{T} \prod_{l=1}^{L} \frac{\partial M_{t,l}}{\partial M_{t,l-1}} 
 $$
-M_{t,l} = \operatorname{LN}^{mem}_l(\hat{M}_{t,l}).
-$$
 
-These equations show why the update is not a recurrent gate. The attention
-weights decide which tokens interact inside the current layer, and the residual
-path helps preserve the current input to that layer. However, there is no
-explicit variable that says: keep the old memory, accept the new observation, or
-blend the two in a controlled proportion. The memory token produced by the
-transformer is therefore best understood as a candidate feature, not as a safely
-updated recurrent state.
+-where $L_T$ is the loss at frame $T$, $M_1$ and $M_T$ are the memory states at the first and last frames, 
+-and $\frac{\partial M_{t,l}}{\partial M_{t,l-1}}$ represents the local Jacobian matrix at layer $l$ of frame $t$. 
 
-This matters because the current search crop is not always trustworthy. The
-target may be occluded, motion-blurred, visually close to a distractor, or
-shifted away from the crop center after a previous prediction error. In the
-direct variant, a corrupted observation can enter the memory tokens through
-ordinary attention and then be carried into later frames. The transformer can
-learn to reduce this risk implicitly, but it has to discover that behavior as
-part of the general token-mixing function. For a recurrent tracker, this may be
-insufficient: memory preservation should be an explicit operation, not only an
-emergent side effect of attention.
+Because the search and template tokens do not propagate their hidden states across frames, 
+the temporal gradient flow relies exclusively on the partial derivatives of the memory tokens, 
+$\frac{\partial M_{t,l}}{\partial M_{t,l-1}}$. 
+Suppose we have a 12-layer transformer backbone over a 20-frame sequence;
+this chain expands to 240 sequential Jacobian matrix multiplications. This deep computational graph can quickly result 
+in error accumulation, causing gradient vanishing or explosion. One way to deal with it would be an addtiona of proper skip connections.
 
-The second limitation is the lack of same-depth temporal skip connections. In
-the direct variant, memory is propagated mainly by feeding the previous memory
-tokens into the next transformer computation. Once the current frame starts,
-higher-layer memory is produced through the vertical layer-by-layer path. This
-means that memory at layer `l` does not have a direct gated connection to the
-memory from the previous frame at the same layer, `M_{t-1,l}`. Temporal
-information must pass through a longer chain of transformer operations before it
-can influence deeper memory states. This makes the recurrent path less direct
-and gives losses from later frames a longer and less controlled route back to
-the memory states that produced earlier predictions.
+To address both memory drift and the gradient instability, a more
+intentional architectural design is required. The second architectural variant decouples the proposal of new memory 
+from the update of the memory
+state. In this proposed design, the transformer output is treated as a candidate
+memory representation, \(M'_{t,l}\). A two-stage Gated Recurrent Unit (GRU) mechanism is
+then introduced. The first GRU fuses the candidate with the previous-frame memory to
+create an explicit temporal skip connection, while the second GRU fuses the result with
+the previous-layer memory to provide a gated depth path. This design provides a controlled memory-update path
+across time and depth.
 
-The second architectural variant was introduced to address both problems. The
-transformer output is treated only as candidate memory, $M'_{t,l}$. A temporal
-GRU then fuses this candidate with the previous-frame memory from the same
-layer, creating an explicit time skip connection. A second GRU fuses the result
-with the previous-layer memory in the current frame. This makes memory updating
-more intentional: the model still uses attention to propose new information,
-but recurrent gates decide how much of that information should enter the final
-memory state.
 
 ## 3.4 Variant B: GRU-based memory update and two-stage architecture
 
@@ -743,83 +665,91 @@ simpler explicit fusion rule is sufficient.
 
 # 4. Sequence-Based and Inference-Like Training
 
-## 4.1 Why the original sampler was insufficient
+## 4.1 Sequence-based training for recurrent memory
 
-The original training sampler was designed for a memory-free template-search tracker. It
-could sample a template frame and a search frame independently from a video and create a
-valid training pair. This is not enough for MemOSTrack. The memory state at frame t
-should depend on the preceding frames. If the training sample contains only one search
-frame, there is no realistic sequence through which memory can evolve.
+Standard OSTrack training is based on independent template-search pairs. A template crop
+is sampled from one frame, a search crop is sampled from another frame in the same video,
+and the model is trained to predict the target box inside the search crop:
 
-The first required rewrite was therefore to make the sampler return video frames as a
-sequence. This changed the training object from a single pair into an ordered set of
-frames. The model could then be executed repeatedly, carrying memory from one search
-frame to the next.
+$$
+\text{sample} = (T, S_t, B_t), \qquad \hat{B}_t = f(T, S_t).
+$$
 
-*sample = (z, x_1, x_2, ..., x_N, B_1, B_2, ..., B_N).*
+Here, \(T\) is the template crop, \(S_t\) is the search crop at time \(t\), and \(B_t\)
+is the target box expressed in the coordinate system of the search crop. This setup is
+sufficient for a memory-free tracker because each training sample can be processed
+independently. No recurrent state has to be carried from previous search frames.
 
-For each search frame, the model predicts a box and updates memory. The important point
-is that the order is preserved. Frame t must be processed after frame t-1, not as an
-independent shuffled sample.
+For MemOSTrack, independent pair-based training is insufficient. If the model has a
+memory state \(M_t\), then this state should be produced from earlier frames in the same
+video. Resetting memory for every pair prevents the model from learning how memory
+evolves across time, while carrying memory across unrelated samples would be incorrect.
 
-## 4.2 First rewrite: sequence sampling
+The sampler was therefore changed to return ordered search-frame sequences. In the
+causal consecutive setting, the sampled frames follow the same temporal direction as
+inference:
 
-The first sampler rewrite introduced causal consecutive sampling. In the project
-configuration, the sampler mode was set to a causal consecutive mode, and the number of
-search frames was set to 20. The intention was to build sequences such as F_t, F\_{t+1},
-..., F\_{t+19}.
+$$
+F_t, F_{t+1}, \dots, F_{t+N-1}.
+$$
 
-The word causal is important. A tracker at time t should not use future frames to
-determine its current memory state. The sequence is processed in the same direction as
-inference: previous frames influence later frames, not the reverse. This is different
-from video understanding tasks where a model may be allowed to look both forward and
-backward in time.
+The training sample becomes:
 
-This rewrite made it possible to train the GRU update. After each frame, the memory
-output becomes the memory input for the next frame. Losses can be applied at each step
-or accumulated over the sequence.
+$$
+\text{sample} = (T, S_1, S_2, \dots, S_N, B_1, B_2, \dots, B_N).
+$$
 
-Sequence sampling solved the temporal ordering problem, but it did not solve the
-train/inference mismatch. If every search crop is centered using the ground-truth box of
-that same frame, training remains artificially easy. The target is always near the
-expected location, and the model does not experience the consequences of its own
-previous prediction errors.
+For each search frame, the model predicts a box and updates its memory state. The memory
+output from one frame becomes the memory input for the next frame. The important point is
+that the order is preserved: frame \(t\) is processed after frame \(t-1\), not as an
+independent shuffled sample. This gives the recurrent memory module a meaningful temporal
+path during training.
 
-During inference, the search crop for frame t is produced using the previous predicted
-box:
+## 4.2 Dynamic search cropping
 
-*x_t = crop(I_t, \hat{B}\_{t-1}).*
+Sequence-based sampling makes recurrent memory training possible, but it does not by
+itself remove the mismatch between training and inference. If every search crop is
+centered using the ground-truth box of the current frame, the tracker receives cleaner
+inputs than it will receive at test time. The target is usually near the center of the
+crop, and the model does not experience the consequences of its own previous prediction
+errors.
 
-Training with ground-truth-centered crops instead uses:
+During inference, the tracker does not know the current ground-truth target location.
+The next search crop must be generated from the previous prediction:
 
-*x_t = crop(I_t, B^{gt}\_t).*
+$$
+S_t = \operatorname{crop}(I_t, \hat{B}_{t-1}).
+$$
 
-These are different. The second equation gives the tracker information that is not
-available at inference time. The difference matters more for recurrent memory because
-memory can amplify errors. If the tracker is never trained under realistic drift, the
-memory may behave poorly when drift occurs during testing.
+Ground-truth-centered training instead uses:
 
-## 4.3 Dynamic search cropping
+$$
+S_t = \operatorname{crop}(I_t, B^{gt}_t).
+$$
 
-The final sampling rewrite introduced dynamic search crop generation. Instead of
-precomputing all search crops around their ground-truth boxes, the training loop
-generates each next crop from the current tracker state. The state is initialized with
-the ground-truth target box in the first frame, but after that the model's own
-predictions affect future crops.
+These two settings are different. The ground-truth-centered crop uses information that
+is unavailable during inference, while the prediction-centered crop allows localization
+errors to influence later inputs. This difference is especially important for recurrent
+memory because an incorrect crop can also affect the memory state passed to later
+frames.
 
-The training loop becomes: initialize the tracker state from the first-frame ground
-truth; crop the current search frame around the current state; run the model on the
-template, search crop, and current memory; predict the target box; update the recurrent
-memory; convert the prediction back to image coordinates; and use that prediction to
-crop the next frame.
+The final training pipeline therefore introduced dynamic search cropping. The tracker
+state is initialized from the first-frame ground-truth box, but later crops are generated
+from the model's own previous predictions. At each step, the model receives the template,
+the current search crop, and the current memory state; it predicts a target box, updates
+memory, maps the prediction back to image coordinates, and uses that prediction to crop
+the next frame:
 
-*c_t = crop(I_t, \hat{B}\_{t-1}), \hat{B}\_t, M_t = f(z, c_t, M\_{t-1}).*
+$$
+S_t = \operatorname{crop}(I_t, \hat{B}_{t-1}), \qquad
+\hat{B}_t, M_t = f(T, S_t, M_{t-1}).
+$$
 
-This loop is more difficult than ordinary pair-based training, but it is conceptually
-closer to inference. The tracker sees the consequences of its own predictions, and the
-memory state is updated under conditions similar to deployment.
+This loop is more difficult than ordinary pair-based training, but it is closer to the
+conditions used during deployment. The tracker sees the consequences of its own
+predictions, and the memory state is updated under inputs that better match inference.
 
-## 4.4 Coordinate transformations in dynamic cropping
+## 4.3 Coordinate transformations in dynamic cropping
 
 Dynamic cropping requires careful coordinate handling. The tracker predicts a box in the
 coordinate system of the search crop, but the next crop must be produced in the
@@ -831,17 +761,20 @@ current crop is accurate.
 The practical pipeline contains three coordinate spaces. The first is the original image
 space, where dataset annotations are defined. The second is the raw crop space, where a
 rectangular region is extracted around the current tracker state. The third is the
-resized network input space, for example 256 by 256 pixels for the search image. The
-model prediction is produced in the network input space and must be mapped back through
-the resize operation and crop offset.
+resized network input space, for example \(256 \times 256\) pixels for the search image.
+The model prediction is produced in the network input space and must be mapped back
+through the resize operation and crop offset.
 
-This is one of the reasons why dynamic cropping is more complex than static ground-truth
-cropping. With static cropping, the crop can be generated from known annotations before
-the forward pass. With dynamic cropping, the crop depends on a prediction that is only
-available after the forward pass. The training loop must therefore interleave model
-execution, loss computation, coordinate conversion, and crop generation.
+This is one of the reasons why dynamic cropping is more complex than static
+ground-truth cropping. With static cropping, the crop can be generated from known
+annotations before the forward pass. With dynamic cropping, the crop depends on a
+prediction that is only available after the forward pass. The training loop must
+therefore interleave model execution, loss computation, coordinate conversion, and crop
+generation.
 
-*\hat{B}^{image}\_t = transform^{-1}(\hat{B}^{crop}\_t).*
+$$
+\hat{B}^{image}_t = \operatorname{transform}^{-1}(\hat{B}^{crop}_t).
+$$
 
 This mapping must also be considered when computing losses. The ground-truth box can be
 transformed into the crop coordinate system, or the prediction can be transformed into
@@ -849,7 +782,12 @@ the image coordinate system. Both choices are valid if implemented consistently.
 thesis does not claim that coordinate handling is a new scientific contribution, but it
 is a necessary engineering part of making the proposed recurrent training pipeline work.
 
-## 4.5 Backpropagation through time in the training loop
+## 4.4 Backpropagation through time in the training loop
+
+Backpropagation through time (BPTT) is the training procedure used when a recurrent
+model is unrolled over several time steps. In MemOSTrack, the time steps correspond to
+ordered search frames, and the recurrent state is the memory-token state passed from one
+frame to the next.
 
 The recurrent part of MemOSTrack consists of two connected mechanisms. First, the
 memory-token state is passed from one search frame to the next. Second, inside the
@@ -863,8 +801,7 @@ Keeping this graph for the whole sampled sequence is expensive. A sequence conta
 search frames, and each frame runs the ViT backbone with memory tokens and per-layer GRU
 updates. If gradients were allowed to pass through the entire memory chain, GPU memory
 usage would grow quickly and optimization would become less stable. For this reason, the
-implementation uses truncated backpropagation through time controlled by
-the memory BPTT length parameter.
+implementation uses truncated BPTT controlled by the memory BPTT length parameter.
 
 The training loop periodically detaches the memory state after the configured number of
 recurrent steps. Detaching keeps the numerical memory value, so the tracker still
@@ -883,7 +820,7 @@ state, but the explicit BPTT control is applied to the recurrent memory tokens. 
 gives a practical compromise: memory can learn from short temporal dependencies while
 the graph remains small enough to train.
 
-## 4.6 Curriculum considerations
+## 4.5 Curriculum considerations
 
 An inference-like crop pipeline may be introduced gradually. One possible curriculum is
 to begin training with ground-truth-centered sequence crops so the memory update learns
@@ -901,11 +838,11 @@ memory first learns from clean sequences and later learns to survive drift.
 
 This observation is consistent with broader sequence-level tracking work, which argues
 that frame-level training can mismatch the test-time objective of maintaining
-localization quality over a whole sequence \[25\]. MemOSTrack addresses the same
-general issue from a different angle: it rewrites the sampler and crop generation so
-that recurrent memory is trained in a sequential setting.
+localization quality over a whole sequence [25]. MemOSTrack addresses the same general
+issue from a different angle: it changes the sampler and crop generation so that
+recurrent memory is trained in a sequential setting.
 
-## 4.7 Why inference-like training is harder
+## 4.6 Why inference-like training is harder
 
 Dynamic cropping makes training harder. With ground-truth-centered crops, the model sees
 clean examples even if its previous predictions would have been inaccurate. With dynamic
@@ -922,6 +859,7 @@ is perfectly centered.
 This trade-off is important when interpreting the final evaluation. A harder training
 pipeline may improve realism while also making optimization more difficult, so its
 effect should be separated by ablation experiments.
+
 
 # 5. Auxiliary Memory Supervision
 
