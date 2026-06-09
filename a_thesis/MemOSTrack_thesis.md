@@ -354,12 +354,17 @@ memory research: because the baseline already has a strong template-search pathw
 new memory pathway may be ignored unless the training setup makes temporal information
 useful.
 
-## 2.2 ViT backbone used in this thesis
+## 2.2 ViT backbone
 
 OSTrack is built on a Vision Transformer backbone. In this thesis, the standard
 ViT-based OSTrack backbone is augmented rather than replaced. A Vision Transformer
 divides an image into fixed-size patches, embeds each patch as a token, adds positional
 information, and processes the resulting sequence with transformer encoder layers [22].
+
+![Vision Transformer architecture.](vit_example.png)
+
+*Figure 2.X - Vision Transformer architecture. Reproduced from* Vision Transformer.svg *by Zhang, Lipton, Li, and Smola,
+licensed under CC BY-SA 4.0, via Wikimedia Commons [26].*
 
 OSTrack adapts this ViT structure to visual object tracking. The template crop and the
 search crop are both converted into patch tokens and then processed together by the same
@@ -369,30 +374,28 @@ In this way, OSTrack unifies feature extraction and template-search interaction 
 one transformer stream [13].
 
 The evaluated MemOSTrack configuration follows the OSTrack-256 + CE backbone setting.
-It uses the `vit_base_patch16_224_ce` backbone with a \(128 \times 128\) pixel template
-crop and a \(256 \times 256\) pixel search crop. The name follows the implementation
-naming convention; the actual configured crop sizes are the template and search sizes
-stated here. With the ViT-B/16 patch size, these crops correspond to 64 template tokens
-and 256 search tokens. The 256-pixel search resolution, ViT-B/16 backbone family, and
-CE-enabled token-pruning mechanism make this configuration the closest direct comparison
-to OSTrack-256 + CE from an architectural point of view.
+It uses a ViT backbone with a (128 \times 128) pixel template crop and a
+(256 \times 256) pixel search crop. With the ViT-B/16 patch size, these crops
+correspond to 64 template tokens and 256 search tokens. The 256-pixel search resolution,
+ViT-B/16 backbone family, and CE-enabled token-pruning mechanism make this configuration
+the closest direct comparison to OSTrack-256 + CE from an architectural point of view.
 
 It is also important that OSTrack uses a pretrained ViT backbone. The original OSTrack
 paper shows that backbone initialization has a significant effect on tracking
 performance, with pretrained ViT models performing much better than training the
 backbone from scratch [13]. This is expected because tracking datasets are usually not
 large enough to learn strong general-purpose visual features without pretraining. In
-this thesis, the model uses the MAE-pretrained ViT-Base
-checkpoint, following the OSTrack configuration. MAE pretraining teaches the backbone
-useful visual representations by masking image patches and training the model to
-reconstruct the missing content [24]. This makes the backbone a strong starting point
-for tracking, while the proposed memory extension can be studied as an augmentation of
-the existing OSTrack architecture rather than as a completely new feature extractor.
+this thesis, the model uses the MAE-pretrained ViT-Base checkpoint, following the
+OSTrack configuration. MAE pretraining teaches the backbone useful visual
+representations by masking image patches and training the model to reconstruct the
+missing content [24]. This makes the backbone a strong starting point for tracking,
+while the proposed memory extension can be studied as an augmentation of the existing
+OSTrack architecture rather than as a completely new feature extractor.
 
 The main same-resolution baseline in this thesis is OSTrack-256 + CE. This baseline is
 the closest comparison because it uses the same search resolution, the same ViT-B/16
-backbone family, and the same CE-enabled pruning mechanism. This makes the
-configuration architecturally aligned with OSTrack-256 + CE.
+backbone family, and the same CE-enabled pruning mechanism. This makes the configuration
+architecturally aligned with OSTrack-256 + CE.
 
 ## 2.3 Candidate elimination
 
@@ -506,7 +509,8 @@ signal that these prefix tokens represent memory states rather than image patche
 In the CE-enabled backbone, memory tokens are intentionally excluded from
 candidate-elimination decisions. First, they are not pruned, because CE removes only
 search tokens. Second, they are excluded from the template mask used for CE scoring, so
-they do not directly influence which search tokens are kept or removed. Thus, CE pruning is decided without treating them as either removable candidates or
+they do not directly influence which search tokens are kept or removed. Thus, CE pruning is decided without treating
+them as either removable candidates or
 scoring tokens, so memory tokens can influence it only indirectly through their
 participation in transformer attention.
 
@@ -535,7 +539,9 @@ sublayer is defined by a residual connection:
 $$
 X'_l =
 X_{l-1}
+
 +
+
 \operatorname{MSA}
 \left(
 \operatorname{LN}(X_{l-1})
@@ -574,14 +580,16 @@ $$
 
 Here, $L_T$ is the loss at frame $T$, $M_1$ and $M_T$ are the memory states at the first and last frames,
 and $\frac{\partial M_{t,l}}{\partial M_{t,l-1}}$ represents the local Jacobian matrix at layer $l$ of frame $t$.
-This expression isolates the recurrent memory path; the full training gradient also contains paths through search tokens,
+This expression isolates the recurrent memory path; the full training gradient also contains paths through search
+tokens,
 template tokens, the prediction head, and the backbone parameters.
 
 Because the search and template tokens do not propagate their hidden states across frames,
 the recurrent temporal path is carried by the memory tokens, represented here by
 $\frac{\partial M_{t,l}}{\partial M_{t,l-1}}$.
 Suppose we have a 12-layer transformer backbone over a 20-frame sequence;
-this chain expands to 240 sequential Jacobian matrix multiplications. This deep computational graph can contribute to error accumulation, causing gradient vanishing or explosion. One way to
+this chain expands to 240 sequential Jacobian matrix multiplications. This deep computational graph can contribute to
+error accumulation, causing gradient vanishing or explosion. One way to
 address this issue is to add explicit temporal skip connections.
 
 To address both memory drift and gradient instability, a more intentional architectural design is required.
@@ -652,9 +660,9 @@ M_{t,l} = \alpha_1 M'_{t,l}
 
 + \alpha_2 M_{t-1,l}
 + \alpha_3 M_{t,l-1},
-\quad
-\alpha_1 + \alpha_2 + \alpha_3 = 1.
-$$
+  \quad
+  \alpha_1 + \alpha_2 + \alpha_3 = 1.
+  $$
 
 Such a softmax-style gate would make the three-source structure explicit. The
 implemented version instead uses two sequential GRU updates. The GRU version is
@@ -857,8 +865,9 @@ filter, $f^*$, is then fitted by minimizing the following least-squares objectiv
 
 $$
 L(f) = \operatorname{mean}\left(\lVert x * f - y \rVert_2^2\right)
+
 + \lambda \operatorname{mean}\left(\lVert f \rVert_2^2\right).
-$$
+  $$
 
 Here, $f^*$ is the filter that best matches the whole training sequence under this least-squares objective. The code
 solves this using a DiMP-style steepest-descent solver with an analytic step length. The inner solver is run under
@@ -898,13 +907,15 @@ complementary, implicit regularization strategy: Template Blurring, detailed in 
 
 ## 5.4 Template Blurring
 
-To complement the explicit auxiliary losses, the thesis also explores **template blurring** as an implicit memory-supervision
+To complement the explicit auxiliary losses, the thesis also explores **template blurring** as an implicit
+memory-supervision
 strategy. Because the baseline OSTrack architecture already possesses a highly effective template-search matching
 pathway, the model can often solve the training task without utilizing the newly introduced memory tokens. Template
 blurring artificially degrades the reliability of the initial template, forcing the tracker to rely on the recurrent
 memory tokens as an alternative source of target appearance information.
 
-Let $z$ denote the original template and $\tilde{z}$ the corrupted template. Two corruption modes were considered: a blur
+Let $z$ denote the original template and $\tilde{z}$ the corrupted template. Two corruption modes were considered: a
+blur
 mode ($\tilde{z} = \text{Blur}(z)$) using repeated average pooling, and a zero-masking mode ($\tilde{z} = 0$). The blur
 mode is less aggressive, removing high-frequency appearance details while preserving coarse structural cues. However,
 because the model might still recover useful information from a blurred template, zero-masking was also introduced. By
@@ -913,7 +924,8 @@ utilize the historical target information stored in the memory tokens.
 
 During training, template corruption is applied randomly to a subset of frames within the sampled sequence. A
 critical design choice is that the first few search frames are strictly excluded from corruption. This allows
-the tracker to process clean frames initially and build a reliable memory state before template corruption is introduced.
+the tracker to process clean frames initially and build a reliable memory state before template corruption is
+introduced.
 Consequently, this mechanism is only applied to sufficiently long training sequences to ensure a proper balance between
 clean and corrupted inputs.
 
@@ -945,15 +957,14 @@ As a baseline, the OSTrack model with a 256-pixel search crop and Candidate Elim
 Following the original OSTrack configuration, the ViT backbone is initialized from an MAE-pretrained checkpoint.
 
 The proposed MemOSTrack configuration builds upon this baseline with the following specifications. The model processes
-a $128 \times 128$ pixel template crop (64 template tokens) and a $256 \times 256$ pixel search crop 
+a $128 \times 128$ pixel template crop (64 template tokens) and a $256 \times 256$ pixel search crop
 (256 search tokens). To this visual sequence, 64 memory tokens are added, bringing the initial sequence length
 to 384 tokens. Memory tokens are updated inside the transformer backbone via the proposed two-stage GRU recurrent
-mechanism. 
+mechanism.
 
 The training pipeline employs a causal consecutive sequence sampler under a two-stage curriculum. To stabilize early
 optimization, the first 40 epochs utilize ground-truth-centered crops with random jitter over 20-frame rollouts.
 After this stage, inference-like dynamic cropping is fully enabled, and the rollout length is reduced to 15 frames.
-
 
 ## 6.3 Hyperparameter and optimizer considerations
 
@@ -1243,6 +1254,10 @@ Are Scalable Vision Learners,' CVPR, 2022.
 
 \[25\] M. Kim, S. Lee, J. Ok, B. Han, and M. Cho, 'Towards Sequence-Level Training for
 Visual Tracking,' ECCV, 2022.
+
+\[25\] A. Zhang, Z. C. Lipton, M. Li, and A. J. Smola, “Vision Transformer.svg,” Wikimedia Commons, 2023. Licensed under
+Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0).
+Available: https://commons.wikimedia.org/wiki/File:Vision_Transformer.svg
 
 # Abstract
 
