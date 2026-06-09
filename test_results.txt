@@ -1,0 +1,19 @@
+-ce -64 mem 256 search val
+Computed results over 180 / 180 sequences
+
+Reporting results over 180 / 180 sequences
+
+got10k_val      | AO         | AUC        | OP50       | OP75       | Precision    | Norm Precision    |
+OSTrack         | 83.54      | 81.89      | 93.78      | 83.32      | 76.06        | 92.87             |
+
+(memostrack) krotan@slavica:/mnt/hdd2/irotan/MemOSTrack$
+
+
+uav:
+Reporting results over 123 / 123 sequences
+
+uav          | AO         | AUC        | OP50       | OP75       | Precision    | Norm Precision    |
+OSTrack      | 65.17      | 62.98      | 78.23      | 53.98      | 84.12        | 77.74             |
+
+
+
