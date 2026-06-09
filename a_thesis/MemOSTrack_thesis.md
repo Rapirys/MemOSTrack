@@ -1147,31 +1147,38 @@ hide.
 
 # Conclusion
 
-This thesis investigated the integration of recurrent memory tokens into OSTrack. The
-proposed MemOSTrack model extends the original one-stream transformer tracker with
-memory tokens and a two-stage GRU update mechanism. The first GRU combines current
-candidate memory with memory from the previous frame, while the second GRU combines the
-result with memory from the previous transformer layer. This design was intended to
-provide both temporal continuity and layer-wise memory refinement.
+This thesis investigated the integration of recurrent memory tokens into OSTrack, a
+one-stream transformer tracker for visual object tracking. The proposed MemOSTrack model
+extends the original OSTrack token sequence with memory tokens and updates them using a
+two-stage GRU mechanism. The first GRU combines the current candidate memory with memory
+from the previous frame, while the second GRU combines the result with memory from the
+previous transformer layer. This design introduces an explicit recurrent memory stream
+while preserving the main structure of the OSTrack backbone.
 
-The work also required a substantial rewrite of the training pipeline. The original
+The work also required substantial changes to the training pipeline. The original
 pair-based sampling strategy was replaced by sequence-based sampling so that memory
-could be propagated through ordered video frames. The final version further introduced
-dynamic search cropping, where the search crop is generated from the previous prediction
-rather than from the current ground truth. This made training more similar to inference,
-although also more difficult.
+could be propagated through ordered video frames. The final training pipeline further
+introduced dynamic search cropping, where each new search crop is generated from the
+previous prediction rather than from the current ground-truth target position. This made
+training more similar to inference, although it also made optimization more difficult.
 
-Auxiliary memory loss heads were explored because a strong OSTrack baseline can ignore
-newly added memory tokens. Template blurring was considered as a complementary solution
-to reduce over-reliance on the clean initial template and encourage use of recurrent
-memory.
+The thesis also explored additional training strategies for making the memory pathway
+useful. Auxiliary memory loss heads were considered because a strong OSTrack baseline
+can solve many training examples through the original template-search pathway and may
+therefore ignore newly added memory tokens. Template blurring was also explored as a
+complementary regularization strategy to reduce over-reliance on the clean initial
+template and encourage the use of recurrent memory.
 
-The final MemOSTrack-256 + CE model achieved AO 0.729, SR0.50 0.823, and SR0.75
-0.693. This improves on the reported same-resolution OSTrack-256 + CE baseline, but it
-does not outperform the stronger higher-resolution OSTrack-384 + CE baseline. The
-result provides a useful foundation for future work on memory supervision, update
-mechanisms, resolution scaling, and training curricula for transformer-based visual
-tracking.
+The final MemOSTrack-256 + CE model achieved AO 0.729, SR0.50 0.823, and SR0.75 0.693
+on GOT-10k. This improves upon the reported same-resolution OSTrack-256 + CE baseline,
+which indicates that the complete memory-augmented training pipeline can be beneficial
+under the evaluated configuration. However, the model does not outperform the stronger
+higher-resolution OSTrack-384 + CE baseline. Since several changes were introduced
+together, the final result should not be interpreted as isolated proof that recurrent
+memory alone caused the improvement. Instead, it provides a useful foundation for future
+work on memory supervision, gated update mechanisms, dynamic training curricula,
+resolution scaling, and ablation studies for transformer-based visual tracking.
+
 
 # References
 
@@ -1256,16 +1263,16 @@ Visual Tracking,' ECCV, 2022.
 ## Extending OSTrack with GRU-Based Memory Tokens for Visual Object Tracking
 
 This thesis investigates the integration of recurrent memory tokens into OSTrack, a
-one-stream transformer tracker. The proposed MemOSTrack model adds memory tokens to
-the template-search token sequence and updates them with a two-stage GRU mechanism using
-previous-frame and previous-layer memory. The training pipeline was rewritten from
-pair-based sampling to ordered video sequence sampling and further extended with dynamic
-search cropping to better match inference. Auxiliary memory loss heads and template
-blurring were explored to encourage the model to use memory. The final model achieved AO
-0.729, SR0.50 0.823, and SR0.75 0.693. It exceeded the reported same-resolution
-OSTrack-256 + CE baseline, but remained slightly below the stronger reported OSTrack-384
-
-+ CE baseline.
+one-stream transformer tracker for visual object tracking. The proposed MemOSTrack model
+extends the template-search token sequence with memory tokens and updates them using a
+two-stage GRU mechanism that combines previous-frame and previous-layer memory. The
+training pipeline was rewritten from independent pair-based sampling to ordered video
+sequence sampling, and it was further extended with dynamic search cropping to better
+match the inference setting. Auxiliary memory loss heads and template blurring were also
+explored as strategies for encouraging the model to use the added memory pathway. On
+GOT-10k, the final MemOSTrack-256 + CE model achieved AO 0.729, SR0.50 0.823, and
+SR0.75 0.693. It improved upon the reported same-resolution OSTrack-256 + CE baseline,
+but remained slightly below the stronger reported OSTrack-384 + CE baseline.
 
 Keywords: visual object tracking, OSTrack, transformer, GRU, memory tokens, dynamic
 cropping
@@ -1274,31 +1281,35 @@ cropping
 
 ## Extending OSTrack with GRU-Based Memory Tokens for Visual Object Tracking
 
-The thesis studies whether a transformer-based tracker can benefit from explicit
-recurrent memory. OSTrack is selected as the baseline because it is a strong one-stream
-tracker that jointly processes template and search tokens. The proposed MemOSTrack
-model inserts memory tokens into this token sequence. A transformer layer first produces
-candidate memory, after which a two-stage GRU update combines the candidate with
-previous-frame memory and previous-layer memory.
+This thesis studies whether a transformer-based visual object tracker can benefit from
+explicit recurrent memory. OSTrack is selected as the baseline because it is a strong
+one-stream tracker that jointly processes template and search tokens inside a single
+transformer backbone. The proposed MemOSTrack model adds memory tokens to this token
+sequence. Each transformer layer first produces a candidate memory representation, after
+which a two-stage GRU update combines the candidate with previous-frame memory and
+previous-layer memory.
 
 A major part of the work is the training pipeline. The original pair-based sampler was
-not sufficient because recurrent memory needs ordered video frames. Therefore, the
-sampler was rewritten to return causal consecutive search sequences. The final pipeline
-also uses dynamic search cropping, where each next search crop is produced from the
-previous prediction. This makes training closer to real inference.
+not sufficient for recurrent memory, because memory must be propagated through ordered
+frames from the same video. Therefore, the sampler was rewritten to return causal
+consecutive search sequences. The final pipeline also introduced dynamic search
+cropping, where each next search crop is produced from the previous prediction rather
+than from the current ground-truth box. This makes training closer to real inference,
+where the tracker must operate using its own previous predictions.
 
-The thesis also discusses memory loss heads and template blurring. Memory loss heads
-were introduced to prevent the model from ignoring memory tokens. Template blurring was
-explored to reduce over-reliance on the clean initial template and encourage the use of
-temporal memory.
+The thesis also explores auxiliary memory supervision and template blurring. Auxiliary
+memory loss heads were considered because a strong OSTrack baseline can solve many
+training samples through the original template-search pathway and may ignore the added
+memory tokens. Template blurring was explored as a complementary regularization strategy
+that weakens the initial template and encourages the use of temporal information.
 
-The final evaluation shows that MemOSTrack-256 + CE achieved AO 0.729, SR0.50
-0.823, and SR0.75 0.693. These results are higher than the reported OSTrack-256 + CE
-baseline, but lower than the reported OSTrack-384 + CE baseline. The main conclusion is
-that the final MemOSTrack configuration improves the same-resolution 256 CE setting, but
-does not yet surpass the higher-resolution 384 CE model. Further optimization and
-ablation studies are required to separate the effects of memory, dynamic cropping,
-candidate elimination, and resolution.
+The final evaluation shows that MemOSTrack-256 + CE achieved AO 0.729, SR0.50 0.823,
+and SR0.75 0.693 on GOT-10k. These results are higher than the reported OSTrack-256 +
+CE baseline, but lower than the reported OSTrack-384 + CE baseline. The main conclusion
+is that the final MemOSTrack configuration improves the same-resolution 256 CE setting,
+but does not yet surpass the higher-resolution 384 CE model. Further optimization and
+ablation studies are required to separate the effects of recurrent memory, dynamic
+cropping, candidate elimination, training curriculum, and resolution.
 
 # Abbreviations
 
