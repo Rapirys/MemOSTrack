@@ -363,7 +363,7 @@ information, and processes the resulting sequence with transformer encoder layer
 
 ![Vision Transformer architecture.](vit_example.png)
 
-*Figure 2.X - Vision Transformer architecture. Reproduced from* Vision Transformer.svg *by Zhang, Lipton, Li, and Smola,
+*Figure 2.X - Vision Transformer architecture.* Vision Transformer.svg *by Zhang, Lipton, Li, and Smola,
 licensed under CC BY-SA 4.0, via Wikimedia Commons [26].*
 
 OSTrack adapts this ViT structure to visual object tracking. The template crop and the
