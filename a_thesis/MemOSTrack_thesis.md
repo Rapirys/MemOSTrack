@@ -644,36 +644,28 @@ temporal modeling. While the standard Vision Transformer architecture is effecti
 spatial feature extraction and template-search matching, relying on it alone for
 recurrent memory updates is insufficient.
 
-The first limitation is the lack of explicit gating for memory preservation. In the
-direct variant, memory tokens are updated by the same transformer block as the visual
-tokens. For a standard pre-normalization transformer layer, the output of the attention
-sublayer is defined by a residual connection:
+The first limitation is the lack of explicit gating for memory preservation. In the direct-update variant,
+memory tokens are updated by directly by the same transformer block. The attention mechanism is effective
+for deciding which template and search tokens should influence the memory representation, however, it does not provide
+a dedicated gate that controles how much of the previous memory should be kept and how much new information should be written.
 
-$$
-X'_l =
-X_{l-1}
+Equation (2.3) does provide a residual path that can preserve information from the previous layer:
 
+[
+U_l =
+Z_{l-1}
 +
-
 \operatorname{MSA}
 \left(
-\operatorname{LN}(X_{l-1})
+\operatorname{LN}(Z_{l-1})
 \right).
-$$
+]
 
-Here, \(X_{l-1}\) represents the input token sequence, including search, template, and
-memory tokens. \(\operatorname{LN}(\cdot)\) denotes Layer Normalization, and
-\(\operatorname{MSA}(\cdot)\) denotes Multi-Head Self-Attention.
-
-While the attention mechanism is effective for determining which visual tokens should
-influence the memory state, it does not provide a dedicated mechanism for controlling
-how much of the existing memory should be preserved. The residual connection described
-by the equation above can carry the previous token representation forward. However, it
-adds the previous token representation and the new attention update without explicitly
-deciding how much each should contribute.
-Over long tracking sequences of tens or hundreds of frames, the lack of explicit gating can become a limitation. In the
-direct-update variant, repeated ungated updates may gradually make the memory state
-drift or become less representative of the target.
+Since (Z_{l-1}) includes the memory tokens in the direct-update variant,
+this residual connection passes their previous layer representation forward.
+While in principle, the model can learn to produce a small attention update, (\operatorname{MSA}(\operatorname{LN}(Z_{l-1}))),
+when the memory does not need to change much, this mechanism may be weaker than an explicit update gate.
+Over long tracking sequences, repeated ungated updates may still gradually alter the memory state and make it less representative of the target.
 
 The second limitation is the susceptibility to gradient instability during Backpropagation Through Time due
 to an absence of temporal skip connections. In recurrent neural networks, there are often temporal skip connections
