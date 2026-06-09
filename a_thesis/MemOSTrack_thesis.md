@@ -692,7 +692,7 @@ memory state \(M_t\), then this state should be produced from earlier frames in 
 video. Resetting memory for every pair prevents the model from learning how memory
 evolves across time, while carrying memory across unrelated samples would be incorrect.
 
-The sampler was therefore changed to return ordered search-frame sequences. In the
+The sampler was therefore changed to return ordered search-frame sequences [25]. In the
 causal consecutive setting, the sampled frames follow the same temporal direction as
 inference:
 
@@ -771,7 +771,7 @@ The introduction of memory tokens transforms the tracker into a recurrent model,
 error backpropagation across temporal iterations. Allowing gradients to flow through an entire video sequence is both
 computationally expensive and highly demanding on GPU memory. Additionally, unrolling the computational graph over long
 sequences amplifies the risk of gradient instability, such as vanishing or exploding gradients. A standard approach to
-address this is Truncated Backpropagation Through Time. In the provided implementation, the model periodically
+address this is Truncated Backpropagation Through Time [27]. In the provided implementation, the model periodically
 detaches the memory state from the computation graph after a fixed number of frames (specifically, 8 frames during
 training). This truncation limits how far the gradients can propagate backward in time, balancing the need to learn
 temporal dependencies with computational feasibility and training stability.
@@ -987,7 +987,7 @@ accumulates losses over multiple frames and backpropagates through a memory chai
 Dynamic cropping can also create hard examples when early predictions move the crop away
 from the target. These factors can lead to occasional large gradients. Gradient clipping
 is therefore a practical stabilization technique, especially when newly initialized
-recurrent parameters are trained together with a pretrained transformer backbone.
+recurrent parameters are trained together with a pretrained transformer backbone [28].
 
 ## 6.4 Evaluation protocol
 
@@ -1255,9 +1255,18 @@ Are Scalable Vision Learners,' CVPR, 2022.
 \[25\] M. Kim, S. Lee, J. Ok, B. Han, and M. Cho, 'Towards Sequence-Level Training for
 Visual Tracking,' ECCV, 2022.
 
-\[25\] A. Zhang, Z. C. Lipton, M. Li, and A. J. Smola, “Vision Transformer.svg,” Wikimedia Commons, 2023. Licensed under
-Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0).
-Available: https://commons.wikimedia.org/wiki/File:Vision_Transformer.svg
+\[26\] A. Zhang, Z. C. Lipton, M. Li, and A. J. Smola, 'Vision Transformer.svg,'
+Wikimedia Commons, 2024. Licensed under Creative Commons Attribution-ShareAlike 4.0
+International (CC BY-SA 4.0). Available:
+https://commons.wikimedia.org/wiki/File:Vision_Transformer.svg
+
+\[27\] R. J. Williams and D. Zipser, 'Gradient-Based Learning Algorithms for Recurrent
+Networks and Their Computational Complexity,' in Backpropagation: Theory, Architectures,
+and Applications, 1995.
+
+\[28\] R. Pascanu, T. Mikolov, and Y. Bengio, 'On the Difficulty of Training Recurrent
+Neural Networks,' Proceedings of the 30th International Conference on Machine Learning
+(ICML), 2013.
 
 # Abstract
 
