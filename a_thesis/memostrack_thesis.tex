@@ -31,6 +31,30 @@
 \providecommand{\pandocbounded}[1]{#1}
 \newcommand{\passthrough}[1]{#1}
 
+\newcommand{\FormulaNotationWith}[2]{%
+\vspace{-0.6em}
+\noindent\hspace*{1.2em}%
+\begin{minipage}{0.90\textwidth}
+\footnotesize
+#1
+\vspace{0.2em}
+\begin{list}{\(\bullet\)}{
+    \setlength{\leftmargin}{1.4em}
+    \setlength{\labelwidth}{0.8em}
+    \setlength{\labelsep}{0.5em}
+    \setlength{\itemsep}{0.05em}
+    \setlength{\parsep}{0pt}
+    \setlength{\topsep}{0.25em}
+    \setlength{\partopsep}{0pt}
+}
+#2
+\end{list}
+\end{minipage}
+\par
+}
+\newcommand{\FormulaNotation}[1]{\FormulaNotationWith{where:}{#1}}
+
+
 \title{Extending OSTrack with GRU-Based Memory Tokens for Visual Object Tracking}
 \author{Student's name and surname}
 \date{June 2026}
@@ -299,23 +323,40 @@ The standard localization measure used in these evaluations is intersection over
 of their intersection divided by the area of their union. A value of 1 means perfect
 overlap, while a value of 0 means that the boxes do not overlap.
 
-\[
+\begin{equation}
 \operatorname{IoU}(B_{\text{pred}}, B_{\text{gt}})
 =
 \frac{|B_{\text{pred}} \cap B_{\text{gt}}|}
 {|B_{\text{pred}} \cup B_{\text{gt}}|}
-\]
+\tag{1.1}
+\end{equation}
+\FormulaNotation{
+\item \(B_{\text{pred}}\) is the predicted bounding box;
+\item \(B_{\text{gt}}\) is the ground-truth bounding box;
+\item \(\cap\) denotes the intersection of the two boxes;
+\item \(\cup\) denotes the union of the two boxes;
+\item \(|\cdot|\) denotes the area of a box region.
+}
 
 GOT-10k reports Average Overlap (AO), SR0.50, and SR0.75 {[}20{]}. AO is computed
 as the average IoU over all evaluated frames:
 
-\[
+\begin{equation}
 \operatorname{AO}
 =
 \frac{1}{N}
 \sum_{i=1}^{N}
 \operatorname{IoU}(B^{i}_{\text{pred}}, B^{i}_{\text{gt}}).
-\]
+\tag{1.2}
+\end{equation}
+\FormulaNotation{
+\item \(\operatorname{AO}\) is the Average Overlap score;
+\item \(N\) is the number of evaluated frames;
+\item \(i\) is the frame index;
+\item \(B^{i}_{\text{pred}}\) is the predicted bounding box for frame \(i\);
+\item \(B^{i}_{\text{gt}}\) is the ground-truth bounding box for frame \(i\);
+\item \(\operatorname{IoU}(\cdot,\cdot)\) is the intersection-over-union function defined in (1.1).
+}
 
 SR0.50 is the proportion of frames whose overlap is at least 0.50, while SR0.75 is the
 proportion of frames whose overlap is at least 0.75. SR0.75 is stricter and is more
@@ -409,10 +450,7 @@ X_p = [x_1, x_2, \ldots, x_N]^\top
 \end{aligned}
 \tag{2.1}
 \end{equation}
-
-where:
-
-\begin{itemize}
+\FormulaNotation{
 \item \(X \in \mathbb{R}^{H \times W \times C}\) is the input image crop;
 \item \(H\) and \(W\) are the height and width of the crop;
 \item \(C\) is the number of image channels;
@@ -420,7 +458,7 @@ where:
 \item \(N\) is the number of patches;
 \item \(x_i \in \mathbb{R}^{P^2C}\) is the flattened vector of the \(i\)-th patch;
 \item \(X_p\) is the matrix containing all flattened patch vectors.
-\end{itemize}
+}
 
 The flattened patches are projected into a \(D\)-dimensional embedding space, and
 positional embeddings are added:
@@ -431,32 +469,14 @@ Z_0 &= E_X + P_{\mathrm{pos}}.
 \end{aligned}
 \tag{2.2}
 \end{equation}
-
-\vspace{-0.6em}
-\noindent\hspace*{1.2em}
-\begin{minipage}{0.90\textwidth}
-\footnotesize
-where:
-\vspace{0.2em}
-
-\begin{list}{\(\bullet\)}{
-    \setlength{\leftmargin}{1.4em}
-    \setlength{\labelwidth}{0.8em}
-    \setlength{\labelsep}{0.5em}
-    \setlength{\itemsep}{0.05em}
-    \setlength{\parsep}{0pt}
-    \setlength{\topsep}{0.25em}
-    \setlength{\partopsep}{0pt}
+\FormulaNotation{
+\item \(E_X \in \mathbb{R}^{N \times D}\) is the patch-embedding sequence;
+\item \(W_E \in \mathbb{R}^{P^2C \times D}\) is the learnable patch-projection matrix;
+\item \(b_E \in \mathbb{R}^{D}\) is the learnable projection bias, broadcast across all patches;
+\item \(D\) is the token embedding dimension;
+\item \(P_{\mathrm{pos}} \in \mathbb{R}^{N \times D}\) is the positional embedding;
+\item \(Z_0 \in \mathbb{R}^{N \times D}\) is the initial token sequence passed to the transformer encoder.
 }
-\item \(X \in \mathbb{R}^{H \times W \times C}\) is the input image crop;
-\item \(H\) and \(W\) are the height and width of the crop;
-\item \(C\) is the number of image channels;
-\item \(P\) is the patch size, assuming that \(H\) and \(W\) are divisible by \(P\);
-\item \(N\) is the number of patches;
-\item \(x_i \in \mathbb{R}^{P^2 C}\) is the flattened vector of the \(i\)-th patch;
-\item \(X_p\) is the matrix containing all flattened patch vectors.
-\end{list}
-\end{minipage}
 
 A standard pre-normalization ViT encoder layer first applies Layer Normalization and Multi-Head Self-Attention, followed
 by a residual connection:
@@ -473,17 +493,14 @@ Z_{l-1}
 \end{aligned}
 \tag{2.3}
 \end{equation}
-
-where:
-
-\begin{itemize}
+\FormulaNotation{
 \item \(l\) is the transformer layer index;
 \item \(Z_{l-1}\) is the input token sequence to layer \(l\);
 \item \(\operatorname{LN}(\cdot)\) denotes Layer Normalization;
 \item \(A_l\) is the normalized token sequence;
 \item \(\operatorname{MSA}(\cdot)\) denotes Multi-Head Self-Attention;
 \item \(U_l\) is the token sequence after self-attention and residual addition.
-\end{itemize}
+}
 
 In the CE-enabled OSTrack backbone, candidate elimination is inserted after this attention-and-residual step:
 
@@ -495,14 +512,11 @@ U_l, & \text{otherwise}.
 \end{cases}
 \tag{2.4}
 \end{equation}
-
-where:
-
-\begin{itemize}
-\item \(\operatorname{CE}_l(\cdot)\) denotes the candidate elimination operation at layer \(l\);
+\FormulaNotation{
 \item \(\bar{U}_l\) is the token sequence after optional CE pruning;
-\item if CE is not enabled at layer \(l\), the sequence is left unchanged.
-\end{itemize}
+\item \(\operatorname{CE}_l(\cdot)\) denotes the candidate elimination operation at layer \(l\);
+\item \(U_l\) is the unpruned token sequence from the attention-and-residual step.
+}
 
 Candidate elimination is specific to OSTrack and is only present in CE-enabled configurations. It is not part of the
 original ViT encoder block. The detailed CE scoring and pruning procedure is described separately in Section 2.3.
@@ -521,14 +535,12 @@ Z_l &=
 \end{aligned}
 \tag{2.5}
 \end{equation}
-
-where:
-
-\begin{itemize}
+\FormulaNotation{
+\item \(Z_l\) is the output token sequence of layer \(l\);
 \item \(\bar{U}_l\) is the input to the MLP part of the encoder layer;
 \item \(\operatorname{MLP}(\cdot)\) is the feed-forward network;
-\item \(Z_l\) is the output token sequence of layer \(l\).
-\end{itemize}
+\item \(\operatorname{LN}(\cdot)\) denotes Layer Normalization.
+}
 
 The Multi-Head Self-Attention operation lets each token aggregate information from other tokens in the same sequence.
 For one attention head \(h\), it is written as:
@@ -559,17 +571,15 @@ W_O.
 \end{aligned}
 \tag{2.6}
 \end{equation}
-
-where:
-
-\begin{itemize}
+\FormulaNotation{
 \item \(A\) is the normalized input sequence to the attention operation;
+\item \(h\) is the attention-head index;
 \item \(Q_h\), \(K_h\), and \(V_h\) are the query, key, and value matrices for head \(h\);
 \item \(W_Q^h\), \(W_K^h\), and \(W_V^h\) are learnable projection matrices for head \(h\);
 \item \(d_h\) is the feature dimension of one attention head;
 \item \(n_h\) is the number of attention heads;
 \item \(W_O\) is the output projection matrix after concatenating all heads.
-\end{itemize}
+}
 
 The MLP is applied independently to each token:
 
@@ -587,15 +597,12 @@ b_2.
 \end{aligned}
 \tag{2.7}
 \end{equation}
-
-where:
-
-\begin{itemize}
+\FormulaNotation{
 \item \(z \in \mathbb{R}^{D}\) is one token vector;
 \item \(W_1\), \(W_2\), \(b_1\), and \(b_2\) are learnable MLP parameters;
 \item \(\operatorname{GELU}(\cdot)\) is the activation function used inside the feed-forward block.
-\end{itemize}
-
+}
+\\
 OSTrack applies this ViT backbone to a pair of tracking crops. Let \(T\) denote the template crop and \(S_t\) denote the
 search crop at frame \(t\). Their token sequences are
 
@@ -612,10 +619,7 @@ Z_{t,0}^{\mathrm{track}}
 \end{aligned}
 \tag{2.8}
 \end{equation}
-
-where:
-
-\begin{itemize}
+\FormulaNotation{
 \item \(T\) is the template crop from the first annotated frame;
 \item \(S_t\) is the search crop from frame \(t\);
 \item \(\operatorname{PatchEmbed}(\cdot)\) denotes patch flattening followed by linear projection;
@@ -624,7 +628,7 @@ where:
 \item \(S_{t,0} \in \mathbb{R}^{N_S \times D}\) is the initial search-token sequence;
 \item \([\cdot,\cdot]\) denotes concatenation along the token dimension;
 \item \(Z_{t,0}^{\mathrm{track}}\) is the combined OSTrack input sequence for frame \(t\).
-\end{itemize}
+}
 
 After \(L\) transformer layers, the backbone output is
 
@@ -641,15 +645,13 @@ Z_{t,0}^{\mathrm{track}}
 \end{aligned}
 \tag{2.9}
 \end{equation}
-
-where:
-
-\begin{itemize}
+\FormulaNotation{
 \item \(L\) is the number of transformer layers;
 \item \(Z_{t,L}^{\mathrm{track}}\) is the final backbone output for frame \(t\);
+\item \(\operatorname{ViTBackbone}(\cdot)\) denotes the full ViT backbone mapping;
 \item \(T_L^{(t)}\) denotes the processed template-token representation while tracking frame \(t\);
 \item \(S_{t,L}\) denotes the processed search-token representation for frame \(t\).
-\end{itemize}
+}
 
 The final search-token part \(S_{t,L}\) is reshaped into a spatial feature map and passed to the prediction head.
 
@@ -674,23 +676,44 @@ template crop. If this token is denoted by \(\phi\) and the transformer has \(M\
 attention heads, the score of search token \(x\) is computed by averaging attention from
 \(\phi\) to \(x\) over all heads:
 
-\[
+\begin{equation}
 w_x^{\phi} = \frac{1}{M}\sum_{m=1}^{M} w_x^{\phi}(m).
-\]
+\tag{2.10}
+\end{equation}
+\FormulaNotation{
+\item \(w_x^{\phi}\) is the averaged attention score from the representative template token to search token \(x\);
+\item \(\phi\) is the representative template token;
+\item \(x\) is a search token;
+\item \(M\) is the number of attention heads;
+\item \(m\) is the attention-head index;
+\item \(w_x^{\phi}(m)\) is the attention score from \(\phi\) to \(x\) in head \(m\).
+}
 
 Search tokens with the highest scores are kept, while lower-scoring search tokens are
 removed from the sequence for later transformer layers. If \(k\) tokens are kept from
 \(n\) current search tokens, the keep ratio is:
 
-\[
+\begin{equation}
 \rho = \frac{k}{n}.
-\]
+\tag{2.11}
+\end{equation}
+\FormulaNotation{
+\item \(\rho\) is the keep ratio;
+\item \(k\) is the number of search tokens kept after pruning;
+\item \(n\) is the number of current search tokens before pruning.
+}
 
 The kept search-token indices can be written as:
 
-\[
+\begin{equation}
 I_{\text{keep}} = \operatorname{TopK}(w_x^{\phi}, k).
-\]
+\tag{2.12}
+\end{equation}
+\FormulaNotation{
+\item \(I_{\text{keep}}\) is the set of retained search-token indices;
+\item \(\operatorname{TopK}(\cdot,k)\) selects the \(k\) highest-scoring tokens;
+\item \(w_x^{\phi}\) is the attention-based score used for ranking search tokens.
+}
 
 The original order and positions of the remaining search tokens are stored. Before the
 prediction head, the kept search tokens are restored to their spatial order and the
@@ -736,29 +759,22 @@ to learn a useful memory update strategy.
 In the direct transformer-based update, each ViT layer produces transformed search,
 template, and memory tokens in a single forward pass:
 
-\[
+\begin{equation}
 [S_{t,l}, T_{t,l}, M_{t,l}]
 =
 \operatorname{ViTLayer}_l
 \left(
 [S_{t,l-1}, T_{t,l-1}, M_{t,l-1}]
 \right).
-\]
-
-Here:
-
-\begin{itemize}
-\tightlist
-\item
-  \(S_{t,l}\) denotes the search tokens after layer \(l\) while processing frame \(t\);
-\item
-  \(T_{t,l}\) denotes the template tokens after layer \(l\) while processing frame \(t\);
-\item
-  \(M_{t,l-1}\) is the memory input from the previous transformer layer in the current
-  frame;
-\item
-  \(M_{t,l}\) is the memory output produced directly by the ViT layer.
-\end{itemize}
+\tag{3.1}
+\end{equation}
+\FormulaNotationWith{Here:}{
+\item \(S_{t,l}\) denotes the search tokens after layer \(l\) while processing frame \(t\);
+\item \(T_{t,l}\) denotes the template tokens after layer \(l\) while processing frame \(t\);
+\item \(M_{t,l-1}\) is the memory input from the previous transformer layer in the current frame;
+\item \(M_{t,l}\) is the memory output produced directly by the ViT layer;
+\item \(\operatorname{ViTLayer}_l(\cdot)\) denotes transformer layer \(l\).
+}
 
 All token groups have the same embedding dimension \(D\), so they can be concatenated
 along the token dimension and processed by the same transformer block.
@@ -802,7 +818,7 @@ direct variant, memory tokens are updated by the same transformer block as the v
 tokens. For a standard pre-normalization transformer layer, the output of the attention
 sublayer is defined by a residual connection:
 
-\[
+\begin{equation}
 X'_l =
 X_{l-1}
 +
@@ -810,11 +826,14 @@ X_{l-1}
 \left(
 \operatorname{LN}(X_{l-1})
 \right).
-\]
-
-Here, \(X_{l-1}\) represents the input token sequence, including search, template, and
-memory tokens. \(\operatorname{LN}(\cdot)\) denotes Layer Normalization, and
-\(\operatorname{MSA}(\cdot)\) denotes Multi-Head Self-Attention.
+\tag{3.2}
+\end{equation}
+\FormulaNotationWith{Here:}{
+\item \(X'_l\) is the output token sequence after the attention sublayer at layer \(l\);
+\item \(X_{l-1}\) represents the input token sequence, including search, template, and memory tokens;
+\item \(\operatorname{LN}(\cdot)\) denotes Layer Normalization;
+\item \(\operatorname{MSA}(\cdot)\) denotes Multi-Head Self-Attention.
+}
 
 While the attention mechanism is effective for determining which visual tokens should
 influence the memory state, it does not provide a dedicated mechanism for controlling
@@ -833,17 +852,24 @@ present only in the form of a feedback loop, where the last layer of the current
 of the next frame. This means that when unrolling the memory tokens over \(T\) frames through an \(L\)-layer backbone, the
 gradient has to travel through all layers of the backbone for each frame:
 
-\[
+\begin{equation}
 \frac{\partial L_T}{\partial M_1}
 \supset
 \frac{\partial L_T}{\partial M_T}
 \prod_{t=2}^{T}
 \prod_{l=1}^{L}
 \frac{\partial M_{t,l}}{\partial M_{t,l-1}} .
-\]
-
-Here, \(L_T\) is the loss at frame \(T\), \(M_1\) and \(M_T\) are the memory states at the first and last frames,
-and \(\frac{\partial M_{t,l}}{\partial M_{t,l-1}}\) represents the local Jacobian matrix at layer \(l\) of frame \(t\).
+\tag{3.3}
+\end{equation}
+\FormulaNotationWith{Here:}{
+\item \(L_T\) is the loss at frame \(T\);
+\item \(M_1\) and \(M_T\) are the memory states at the first and last frames;
+\item \(t\) is the frame index;
+\item \(l\) is the transformer layer index;
+\item \(L\) is the number of transformer layers;
+\item \(\frac{\partial M_{t,l}}{\partial M_{t,l-1}}\) represents the local Jacobian matrix at layer \(l\) of frame \(t\);
+\item \(\supset\) indicates that the expression shows one component of the full gradient path.
+}
 This expression isolates the recurrent memory path; the full training gradient also contains paths through search
 tokens,
 template tokens, the prediction head, and the backbone parameters.
@@ -873,31 +899,58 @@ appearance changes.
 In this version, the transformer layer does not directly produce the final memory. Instead, the transformer output is
 treated as a candidate memory representation:
 
-\[
+\begin{equation}
 [S_{t,l}, T_{t,l}, M'_{t,l}] =
 \mathrm{ViTLayer}_l([S_{t,l-1}, T_{t,l-1}, M_{t,l-1}]).
-\]
+\tag{3.4}
+\end{equation}
+\FormulaNotation{
+\item \(M'_{t,l}\) is the candidate memory representation proposed by the transformer layer;
+\item \(S_{t,l}\) and \(T_{t,l}\) are the search and template tokens after layer \(l\) at frame \(t\);
+\item \(M_{t,l-1}\) is the memory from the previous layer in the current frame;
+\item \(\mathrm{ViTLayer}_l(\cdot)\) denotes transformer layer \(l\).
+}
 
 The value \(M'_{t,l}\) is the memory suggested by attention at the current frame and layer. It is not accepted directly.
 Instead, it is passed to a two-stage GRU update. The first GRU combines the candidate memory with the memory from the
 previous frame at the same layer, creating an explicit temporal skip connection:
 
-\[
+\begin{equation}
 \tilde{M}_{t,l} = \mathrm{GRU}_1(M'_{t,l}, M_{t-1,l}).
-\]
+\tag{3.5}
+\end{equation}
+\FormulaNotation{
+\item \(\tilde{M}_{t,l}\) is the intermediate memory after temporal fusion;
+\item \(\mathrm{GRU}_1(\cdot,\cdot)\) is the first GRU update;
+\item \(M'_{t,l}\) is the current candidate memory;
+\item \(M_{t-1,l}\) is the memory from the previous frame at the same layer.
+}
 
 The second GRU combines the intermediate memory with memory from the previous
 layer in the current frame:
 
-\[
+\begin{equation}
 M_{t,l} = \mathrm{GRU}_2(\tilde{M}_{t,l}, M_{t,l-1}).
-\]
+\tag{3.6}
+\end{equation}
+\FormulaNotation{
+\item \(M_{t,l}\) is the final memory output at frame \(t\) and layer \(l\);
+\item \(\mathrm{GRU}_2(\cdot,\cdot)\) is the second GRU update;
+\item \(\tilde{M}_{t,l}\) is the intermediate memory after temporal fusion;
+\item \(M_{t,l-1}\) is the memory from the previous layer in the current frame.
+}
 
 The final output of the layer is:
 
-\[
+\begin{equation}
 Y_{t,l} = [S_{t,l}, T_{t,l}, M_{t,l}].
-\]
+\tag{3.7}
+\end{equation}
+\FormulaNotation{
+\item \(Y_{t,l}\) is the final token sequence output of layer \(l\) at frame \(t\);
+\item \([\cdot,\cdot,\cdot]\) denotes concatenation along the token dimension;
+\item \(S_{t,l}\), \(T_{t,l}\), and \(M_{t,l}\) are the search, template, and memory tokens after the layer update.
+}
 
 This recurrent update is used only when previous-frame memory is available. On the
 first frame, the tracker has no temporal memory to compare against, so the GRU update is
@@ -923,13 +976,20 @@ A related alternative considered during development was a three-way gated
 update. In that design, the final memory would be a weighted combination of the
 three available memory sources:
 
-\[
+\begin{equation}
 M_{t,l} = \alpha_1 M'_{t,l}
 + \alpha_2 M_{t-1,l}
 + \alpha_3 M_{t,l-1},
   \quad
   \alpha_1 + \alpha_2 + \alpha_3 = 1.
-\]
+\tag{3.8}
+\end{equation}
+\FormulaNotation{
+\item \(M_{t,l}\) is the resulting memory at frame \(t\) and layer \(l\);
+\item \(M'_{t,l}\), \(M_{t-1,l}\), and \(M_{t,l-1}\) are the candidate, previous-frame, and previous-layer memory sources;
+\item \(\alpha_1\), \(\alpha_2\), and \(\alpha_3\) are learned mixture weights;
+\item \(\alpha_1 + \alpha_2 + \alpha_3 = 1\) constrains the weights to sum to one.
+}
 
 Such a softmax-style gate would make the three-source structure explicit. The
 implemented version instead uses two sequential GRU updates. The GRU version is
@@ -945,12 +1005,19 @@ Standard OSTrack training is based on independent template-search pairs. A templ
 is sampled from one frame, a search crop is sampled from another frame in the same video,
 and the model is trained to predict the target box inside the search crop:
 
-\[
+\begin{equation}
 \text{sample} = (T, S_t, B_t), \qquad \hat{B}_t = f(T, S_t).
-\]
-
-Here, \(T\) is the template crop, \(S_t\) is the search crop at time \(t\), and \(B_t\)
-is the target box expressed in the coordinate system of the search crop. This setup is
+\tag{4.1}
+\end{equation}
+\FormulaNotationWith{Here:}{
+\item \(\text{sample}\) denotes one pair-based training sample;
+\item \(T\) is the template crop;
+\item \(S_t\) is the search crop at time \(t\);
+\item \(B_t\) is the target box expressed in the coordinate system of the search crop;
+\item \(\hat{B}_t\) is the predicted target box at time \(t\);
+\item \(f(\cdot)\) is the tracker model.
+}
+This setup is
 sufficient for a memory-free tracker because each training sample can be processed
 independently. No recurrent state has to be carried from previous search frames.
 
@@ -963,15 +1030,29 @@ The sampler was therefore changed to return ordered search-frame sequences {[}25
 causal consecutive setting, the sampled frames follow the same temporal direction as
 inference:
 
-\[
+\begin{equation}
 F_t, F_{t+1}, \dots, F_{t+N-1}.
-\]
+\tag{4.2}
+\end{equation}
+\FormulaNotation{
+\item \(F_t\) is the video frame at time \(t\);
+\item \(N\) is the number of sampled search frames;
+\item \(F_{t+N-1}\) is the final frame in the sampled ordered sequence.
+}
 
 The training sample becomes:
 
-\[
+\begin{equation}
 \text{sample} = (T, S_1, S_2, \dots, S_N, B_1, B_2, \dots, B_N).
-\]
+\tag{4.3}
+\end{equation}
+\FormulaNotation{
+\item \(\text{sample}\) denotes one sequence-based training sample;
+\item \(T\) is the template crop;
+\item \(S_1, S_2, \dots, S_N\) are ordered search crops;
+\item \(B_1, B_2, \dots, B_N\) are the corresponding target boxes;
+\item \(N\) is the number of search frames in the sampled sequence.
+}
 
 For each search frame, the model predicts a box and updates its memory state. The memory
 output from one frame becomes the memory input for the next frame. The important point is
@@ -991,15 +1072,28 @@ errors.
 During inference, the tracker does not know the current ground-truth target location.
 The next search crop must be generated from the previous prediction:
 
-\[
+\begin{equation}
 S_t = \operatorname{crop}(I_t, \hat{B}_{t-1}).
-\]
+\tag{4.4}
+\end{equation}
+\FormulaNotation{
+\item \(S_t\) is the search crop at time \(t\);
+\item \(\operatorname{crop}(\cdot,\cdot)\) is the crop extraction operation;
+\item \(I_t\) is the full image at time \(t\);
+\item \(\hat{B}_{t-1}\) is the predicted bounding box from the previous frame.
+}
 
 Ground-truth-centered training instead uses:
 
-\[
+\begin{equation}
 S_t = \operatorname{crop}(I_t, B^{gt}_t).
-\]
+\tag{4.5}
+\end{equation}
+\FormulaNotation{
+\item \(S_t\) is the search crop at time \(t\);
+\item \(I_t\) is the full image at time \(t\);
+\item \(B^{gt}_t\) is the ground-truth target box at time \(t\).
+}
 
 These two settings are fundamentally different. The ground-truth-centered crop uses information that
 is unavailable during inference, while the prediction-centered crop allows localization
@@ -1014,10 +1108,23 @@ the current search crop, and the current memory state; it predicts a target box,
 memory, maps the prediction back to image coordinates, and uses that prediction to crop
 the next frame:
 
-\[
-S_t = \operatorname{crop}(I_t, \hat{B}_{t-1}), \qquad
-\hat{B}_t, M_t = f(T, S_t, M_{t-1}).
-\]
+\begin{equation}
+\begin{aligned}
+S_t &= \operatorname{crop}(I_t, \hat{B}_{t-1}), \\
+\hat{B}_t, M_t &= f(T, S_t, M_{t-1}).
+\end{aligned}
+\tag{4.6}
+\end{equation}
+\FormulaNotation{
+\item \(S_t\) is the search crop generated for frame \(t\);
+\item \(I_t\) is the full image at time \(t\);
+\item \(\hat{B}_{t-1}\) is the previous predicted box used as the crop state;
+\item \(\hat{B}_t\) is the predicted box at time \(t\);
+\item \(M_t\) is the updated memory state at time \(t\);
+\item \(T\) is the template crop;
+\item \(M_{t-1}\) is the memory state from the previous frame;
+\item \(f(\cdot)\) is the MemOSTrack model.
+}
 
 This dynamic loop makes training intentionally harder. With ground-truth-centered crops, the model sees
 clean examples even if its previous predictions would have been inaccurate. With dynamic
@@ -1073,20 +1180,41 @@ of frames, denoted by the index set \(\mathcal{S}_t\), is sampled from the curre
 frame \(j \in \mathcal{S}_t\), the filter \(f_t\) is applied to the corresponding search region feature map \(x_j\) via
 cross-correlation to produce a spatial response map:
 
-\[
+\begin{equation}
 s_{t,j} = x_j * f_t.
-\]
+\tag{5.1}
+\end{equation}
+\FormulaNotation{
+\item \(s_{t,j}\) is the spatial response map produced by filter \(f_t\) on frame \(j\);
+\item \(x_j\) is the search-region feature map for sampled frame \(j\);
+\item \(f_t\) is the memory filter predicted at frame \(t\);
+\item \(*\) denotes cross-correlation.
+}
 
 The objective is to minimize the discrepancy between this predicted response map and the ground-truth Gaussian target
 heatmap \(y_j\). The loss for the filter at frame \(t\) is formulated as the Mean Squared Error (MSE) over the sampled
 subset, combined with an \(L_2\) regularization penalty on the filter weights:
 
-\[
-L_t = \frac{1}{|\mathcal{S}_t|} \sum_{j \in \mathcal{S}_t} \lVert x_j * f_t - y_j \rVert_2^2 + \lambda \lVert f_t \rVert_2^2.
-\]
-
-Here, \(\lambda\) is a hyperparameter controlling the strength of the weight regularization, which prevents the filter
-values from growing unbounded. The total auxiliary loss is the average of \(L_t\) across all frames in the sequence that
+\begin{equation}
+\begin{aligned}
+L_t &= \frac{1}{|\mathcal{S}_t|}
+\sum_{j \in \mathcal{S}_t}
+\lVert x_j * f_t - y_j \rVert_2^2
++ \lambda \lVert f_t \rVert_2^2.
+\end{aligned}
+\tag{5.2}
+\end{equation}
+\FormulaNotationWith{Here:}{
+\item \(L_t\) is the auxiliary loss for the filter predicted at frame \(t\);
+\item \(\mathcal{S}_t\) is the sampled subset of frames used to evaluate filter \(f_t\);
+\item \(|\mathcal{S}_t|\) is the number of sampled frames in that subset;
+\item \(j\) is the sampled-frame index;
+\item \(x_j\) is the search-region feature map for frame \(j\);
+\item \(f_t\) is the memory filter predicted at frame \(t\);
+\item \(y_j\) is the ground-truth Gaussian target heatmap for frame \(j\);
+\item \(\lambda\) is a hyperparameter controlling the strength of the weight regularization.
+}
+The total auxiliary loss is the average of \(L_t\) across all frames in the sequence that
 produce a memory filter.
 
 A critical design choice in this algorithm is the treatment of the search features \(x_j\). During the loss computation,
@@ -1130,36 +1258,40 @@ their corresponding ground-truth heatmaps, \(y_1, \dots, y_T\). An initial filte
 detached memory filters predicted by the auxiliary memory head across the sequence. A sequence-level target
 filter, \(f^*\), is then fitted by minimizing the following least-squares objective:
 
-\[
-L(f) = \operatorname{mean}\left(\lVert x * f - y \rVert_2^2\right)
+\begin{equation}
+\begin{aligned}
+L(f) &= \operatorname{mean}\left(\lVert x * f - y \rVert_2^2\right)
 + \lambda \operatorname{mean}\left(\lVert f \rVert_2^2\right).
-\]
-
-Here, \(f^*\) is the filter that best matches the whole training sequence under this least-squares objective. The code
-solves this using a DiMP-style steepest-descent solver with an analytic step length. The inner solver is run under
-\texttt{torch.no\_grad()}, so the optimized target filter is treated as a pseudo-label rather than as a fully differentiable
-inner optimization process.
+\end{aligned}
+\tag{5.3}
+\end{equation}
+\FormulaNotationWith{Here:}{
+\item \(L(f)\) is the least-squares objective for fitting a target filter;
+\item \(f\) is the candidate discriminative filter being optimized;
+\item \(x\) denotes the collected detached search features;
+\item \(y\) denotes the corresponding ground-truth heatmaps;
+\item \(\lambda\) is the regularization strength;
+\item \(\operatorname{mean}(\cdot)\) denotes averaging over the evaluated samples and spatial locations;
+\item \(f^*\) is the filter that best matches the whole training sequence under this least-squares objective.
+}
+The code
+solves this using a steepest-descent solver with an analytic step length.
 
 After computing the target filter, the memory filters predicted by the memory head are trained to match it. The final
 auxiliary loss is the mean squared difference between each predicted filter and the optimized target filter:
 
-\[
+\begin{equation}
 L_{\text{match}} = w_{\text{match}} \frac{1}{M} \sum_i \lVert f_i - f^* \rVert_2^2.
-\]
-
-where:
-
-\begin{itemize}
-\tightlist
-\item
-  \(f_i\) is the predicted memory filter from frame \(i\).
-\item
-  \(f^*\) is the optimized sequence-level target filter.
-\item
-  \(w_{\text{match}}\) is \texttt{FILTER\_MATCH\_WEIGHT}.
-\item
-  \(M\) is the number of predicted memory filters.
-\end{itemize}
+\tag{5.4}
+\end{equation}
+\FormulaNotation{
+\item \(L_{\text{match}}\) is the target-match auxiliary loss;
+\item \(w_{\text{match}}\) is \texttt{FILTER\_MATCH\_WEIGHT};
+\item \(M\) is the number of predicted memory filters;
+\item \(i\) indexes the predicted memory filters;
+\item \(f_i\) is the predicted memory filter from frame \(i\);
+\item \(f^*\) is the optimized sequence-level target filter.
+}
 
 This loss has several advantages over the sampled discriminative filter loss described in Section 5.2. It provides the
 memory branch with a more stable target, because \(f^*\) is estimated from the full sequence rather than a small random
