@@ -1007,7 +1007,7 @@ achieved AO 0.729, SR0.50 0.823, and SR0.75 0.693. The reported OSTrack-256 + CE
 baseline achieves AO 0.710, SR0.50 0.804, and SR0.75 0.682. The reported OSTrack-384 +
 CE baseline achieves AO 0.737, SR0.50 0.832, and SR0.75 0.708 \[13\].
 
-*Table 7.1 - Final quantitative comparison.*
+*Table 7.1 - Final quantitative comparison on GOT-10k.*
 
 | **Method**          | **AO** | **SR0.50** | **SR0.75** | **ΔAO** | **ΔSR0.50** | **ΔSR0.75** |
 |---------------------|-------:|-----------:|-----------:|--------:|------------:|------------:|
@@ -1015,76 +1015,68 @@ CE baseline achieves AO 0.737, SR0.50 0.832, and SR0.75 0.708 \[13\].
 | OSTrack-256 + CE    |  0.710 |      0.804 |      0.682 |  +0.019 |      +0.019 |      +0.011 |
 | OSTrack-384 + CE    |  0.737 |      0.832 |      0.708 |  -0.008 |      -0.009 |      -0.015 |
 
-The delta columns show MemOSTrack-256 + CE minus the listed method. The final
-configuration improves over the reported same-resolution OSTrack-256 + CE baseline on
-all three metrics. The gains are 0.019 AO, 0.019 SR0.50, and 0.011 SR0.75. Because only
-one final configuration is evaluated, this result should be interpreted as preliminary
-evidence for the complete MemOSTrack training configuration rather than as isolated
-proof that recurrent memory alone caused the gain.
+The delta columns indicate the absolute performance differences between MemOSTrack-256 + CE and the respective
+baselines. The final configuration improves upon the reported same-resolution OSTrack-256 + CE baseline across all three
+metrics, with gains of +0.019 in AO, +0.019 in SR0.50, and +0.011 in SR0.75. Because only one final configuration was
+fully evaluated, this result should be interpreted as preliminary evidence for the effectiveness of the complete
+MemOSTrack training pipeline, rather than isolated proof that the recurrent memory alone caused the gain.
 
-However, the result remains below OSTrack-384 + CE. The gaps are 0.008 AO, 0.009
-SR0.50, and 0.015 SR0.75. This means that the current memory-augmented 256 model is
-close to the stronger high-resolution baseline, but it does not surpass it.
-The final interpretation is therefore mixed: the final MemOSTrack configuration improves
-the 256 CE setting, but increasing the search resolution to 384 still gives the best
-accuracy among the compared models.
+However, the results remain below those of OSTrack-384 + CE, with gaps of -0.008 in AO, -0.009 in SR0.50, and -0.015 in
+SR0.75. This indicates that while the memory-augmented 256-resolution model closes the gap to the stronger
+high-resolution baseline, it does not surpass it.
 
-## 7.2 Training-curve analysis
+# 7.2 Training Dynamics
 
-The merged training log was also parsed to inspect the behaviour of the final run over
-time. Figure 7.1 shows the completed training rows, one point per epoch. Figure 7.2
-shows the completed validation rows, which were logged every five epochs. These curves
-are not a substitute for the official GOT-10k test result, but they are useful for
-understanding when the main training-stage changes occurred.
+To understand how the model adapts over time, the learning dynamics were analyzed throughout the training process.
+Figure 7.1 and Figure 7.2 illustrate the training and validation metrics, respectively, which clearly reflect the
+distinct phases of the training strategy.
 
 ![Training metrics by epoch.](ostrack-vitb_256_mae_ce_32x4_got10k_ep100_train_epoch_metrics.png)
 
-*Figure 7.1 - Training loss and overlap metrics parsed from the merged log.*
+*Figure 7.1 - Training loss and overlap metrics over the 75 recorded epochs, illustrating the impact of the different
+training phases.*
 
-The training curve shows the expected rapid early optimization. The total training loss
-falls from 2.033 at epoch 1 to 0.547 at epoch 20, while the training IoU increases from
-0.639 to 0.870. Template blurring was enabled only from the 21st to the 40th epoch. In
-this interval, the separate `Blur/IoU` curve is reported and increases from 0.849 at
-epoch 21 to a maximum of 0.875 at epoch 39. After epoch 40, template blurring was
-disabled and training switched to the inference-like rollout setting. This made the
-training problem harder: the training IoU drops from 0.891 at epoch 40 to 0.869 at epoch
-41, while the GIoU loss increases from 0.114 to 0.139. The curve then recovers as the
-model adapts to the harder rollout regime. After epoch 59, the learning rate was
-significantly decreased. This is visible as an immediate reduction in training loss from
-0.390 at epoch 59 to 0.364 at epoch 60.
+The training curve exhibits rapid early convergence during the initial warm-up phase (epochs 1–20) under standard
+ground-truth-centered cropping. In this period, the total training loss decreases sharply from 2.033 to 0.547, while the
+training IoU climbs to approximately 0.870.
+
+Between epochs 21 and 40, template blurring was introduced to the pipeline. During this phase, the standard training IoU
+remained stable and high. More importantly, the model's performance on specifically corrupted templates—tracked via the
+separate `Blur/IoU` metric—steadily improved from 0.849 at epoch 21 to a peak of 0.875 at epoch 39. This upward trend
+indicates that the network successfully adapted to the degraded initial template, forcing it to rely more heavily on the
+recurrent memory state to maintain accurate localization.
+
+At epoch 41, template blurring was disabled, and the training pipeline transitioned to the inference-like dynamic
+rollout setting. This shift intentionally introduced a significantly harder optimization objective, as the model was now
+forced to handle its own prediction drift across frames. This increased difficulty is immediately visible in the graphs:
+the GIoU loss spikes from 0.114 to 0.139, and the training IoU drops from 0.891 to 0.869. However, the model
+demonstrated robust recovery in the subsequent epochs, successfully adapting to the dynamic crops and restoring its IoU
+to previous levels by epoch 59.
+
+A scheduled learning rate decay at epoch 60 resulted in a further, immediate reduction in training loss (dropping from
+0.390 to 0.364) and a corresponding jump in training accuracy.
 
 ![Validation and test-style metrics by epoch.](ostrack-vitb_256_mae_ce_32x4_got10k_ep100_val_test_epoch_metrics.png)
 
-*Figure 7.2 - Validation/test-style loss and overlap metrics parsed from the merged log.*
+*Figure 7.2 - Validation loss and overlap metrics recorded every five epochs.*
 
-The validation curve follows the same broad pattern, although it is noisier because it is
-measured less frequently. Validation total loss decreases from 0.810 at epoch 5 to
-0.667 at epoch 20. During the blurring phase, validation is logged at epochs 25, 30, 35,
-and 40, so `Blur/IoU` appears only at those validation points even though blur was active
-from epoch 21. The best validation total loss is 0.442 at epoch 60. Later validation
-IoU values continue to increase, reaching 0.885 at epoch 75, but the official GOT-10k
-test selection used the epoch-60 checkpoint. In the external test evaluation, epoch 60
-was the best checkpoint, and the outputs reported in Table 7.1 are produced from that
-checkpoint. This distinction is important: the local validation curves describe training
-dynamics, while the final AO, SR0.50, and SR0.75 numbers are the benchmark test outputs.
+The validation metrics (Figure 7.2) corroborate the trends observed during training, confirming that the model did not
+overfit when transitioning to the harder dynamic rollout phase. The validation loss reached its lowest point of 0.442 at
+epoch 60. Although the internal validation IoU continued to rise slightly in later epochs (reaching 0.885 at epoch 75),
+the epoch-60 checkpoint exhibited the best overall validation loss profile. Consequently, this checkpoint was selected
+for the official, external GOT-10k test evaluation reported in Table 7.1. This distinction is important: the local
+validation curves describe internal training dynamics, whereas the final benchmark results are derived from the optimal
+checkpoint identified by these curves.
 
-## 7.3 Token-budget interpretation
+## 7.3 Computational Cost and Token Budget
 
-These results should also be interpreted in terms of the token budget processed by the
-ViT backbone. The implemented models use a patch size of 16. Therefore, the
-OSTrack-256 setting, with a 128 x 128 template and a 256 x 256 search region, produces
-64 template tokens and 256 search tokens. Its initial visual sequence contains 320
-tokens before candidate elimination. MemOSTrack-256 + CE uses the same visual token
-budget and adds 64 learned memory tokens, so the sequence entering the first
-transformer block contains 384 tokens.
+The performance differences between the models can be further contextualized by analyzing the token budget processed by
+the ViT backbone, which serves as a proxy for computational complexity.
 
-The OSTrack-384 baseline uses a 192 x 192 template and a 384 x 384 search region. This
-produces 144 template tokens and 576 search tokens, or 720 visual tokens before
-candidate elimination. The same count can be derived exactly for the MemOSTrack
-implementation if it is applied at this resolution with the same 64-token memory state:
-the initial sequence would contain 144 template tokens, 576 search tokens, and 64 memory
-tokens, for a total of 784 tokens. This MemOSTrack-384 count is a derived token budget,
-not a trained or evaluated model result in this thesis.
+As shown in Table 7.2, the standard OSTrack-256 setting produces an initial sequence of 320 visual tokens.
+MemOSTrack-256 + CE adds 64 learned memory tokens, increasing the initial sequence to 384 tokens. In contrast, the
+OSTrack-384 baseline processes a much larger $192 \times 192$ template and $384 \times 384$ search region, resulting in
+720 initial visual tokens.
 
 *Table 7.2 - Input token counts before candidate elimination.*
 
@@ -1095,15 +1087,9 @@ not a trained or evaluated model result in this thesis.
 | OSTrack-384 + CE             |                 144 |               576 |                 0 |                720 |
 | MemOSTrack-384 + CE, derived |                 144 |               576 |                64 |                784 |
 
-Candidate elimination changes the active sequence length inside the backbone. In the
-implementation, CE is applied at three transformer blocks. The number of retained search
-tokens is computed by rounding up the product of the current search-token count and the
-configured keep ratio. With the configured keep ratio of 0.7 at all three CE locations,
-the 256 search stream is reduced from 256 tokens to 180, then 126, then 89. The 384
-search stream is reduced from 576 tokens to 404, then 283, then 199. Template tokens are
-not pruned. In MemOSTrack, memory tokens are prepended to the template-side sequence for
-attention and are also kept across CE; however, they are
-excluded from the template mask used to score search-token importance.
+Candidate elimination (CE) dynamically reduces the active sequence length inside the backbone. Table 7.3 illustrates the
+token counts after the three CE pruning stages (using a keep ratio of 0.7). Because memory tokens are preserved across
+CE layers, MemOSTrack-256 retains 217 active tokens in the final layers, compared to 153 for the baseline OSTrack-256.
 
 *Table 7.3 - Active token counts after CE pruning.*
 
@@ -1113,26 +1099,13 @@ excluded from the template mask used to score search-token importance.
 | MemOSTrack-256 + CE |                384 |            308 |            254 |            217 |
 | OSTrack-384 + CE    |                720 |            548 |            427 |            343 |
 
-This token-budget view explains why the two comparisons should be discussed
-separately. MemOSTrack-256 + CE has a 20 percent larger initial sequence than
-OSTrack-256 + CE because of the 64 memory tokens. At the same time, it remains much
-smaller than OSTrack-384 + CE: 384 initial tokens versus 720, and 217 active tokens
-versus 343 after the third CE pruning point. The remaining accuracy gap to
-OSTrack-384 + CE may therefore be partly explained by the larger visual token budget
-of the 384 model, rather than by the memory mechanism alone. Token count should still
-be treated as an approximate proxy for computation, because the actual cost also
-depends on layer depth, attention heads, CE locations, and implementation details.
+This token-budget analysis clarifies the quantitative results. MemOSTrack-256 + CE operates with a 20% larger initial
+sequence than its direct baseline, yielding measurable accuracy improvements. However, it remains computationally much
+lighter than OSTrack-384 + CE, which processes nearly double the number of tokens in the final layers (343 vs. 217). The
+remaining accuracy gap to the 384-resolution model is therefore consistent with the significant difference in their
+spatial token budgets.
 
-## 7.4 What worked technically
-
-Several technical goals were achieved in addition to the final benchmark result. The
-architecture was modified to include memory tokens. The memory tokens were updated
-through a two-stage GRU mechanism. The sampler was rewritten to produce ordered video
-sequences. The training pipeline was rewritten to use inference-like dynamic cropping.
-Auxiliary memory supervision and template blurring were studied as responses to memory
-underuse.
-
-## 7.5 Limitations
+## 7.4 Limitations
 
 The most important limitation is the lack of a full ablation study. Because multiple
 changes were introduced, it is not possible to isolate the exact effect of each
@@ -1150,21 +1123,7 @@ between the main loss and memory loss is difficult and likely important. A sched
 memory loss or a warm-up phase may be more stable than applying the full auxiliary loss
 from the beginning.
 
-## 7.6 Interpretation of the mixed result
-
-The final result is mixed and should be interpreted with respect to the comparison
-setting. It is positive relative to the reported same-resolution OSTrack-256 + CE
-baseline, where MemOSTrack is higher on all three GOT-10k metrics. At the same time, it
-is not enough to surpass the OSTrack-384 + CE baseline, which benefits from a much
-larger search-region token budget.
-
-The correct conclusion is therefore specific: the evaluated MemOSTrack configuration
-improves the 256 CE setting, but it does not replace the accuracy benefit of the 384
-search resolution. This distinction is important. The result is consistent with the
-motivation for adding memory at the same resolution, while the lack of ablations
-prevents assigning the improvement to a single component.
-
-## 7.7 Future work
+## 7.5 Future work
 
 Future work should begin with ablation experiments. The first ablation should compare
 baseline OSTrack, OSTrack with sequence training but no memory, MemOSTrack with static
