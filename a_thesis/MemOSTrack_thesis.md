@@ -374,193 +374,114 @@ where:
 * (X \in \mathbb{R}^{H \times W \times C}) is the input image crop;
 * (H) and (W) are the height and width of the crop;
 * (C) is the number of image channels;
-* (P) is the patch size, assuming that (H) and (W) are divisible by (P);
+* (P) is the patch size;
 * (N) is the number of patches;
 * (x_i \in \mathbb{R}^{P^2C}) is the flattened vector of the (i)-th patch;
-* (X_p) is the matrix containing all flattened patch vectors.
+* (X_p) is the sequence of all flattened patch vectors.
 
-The flattened patches are projected into a (D)-dimensional embedding space, and positional embeddings are added:
+The flattened patches are then projected into the token embedding space, and positional embeddings are added:
 
 [
-E_X = X_p W_E + b_E,
+E_0 = X_p W_E + b_E,
 \qquad
-Z_0 = E_X + P_{\mathrm{pos}}.
+Z_0 = E_0 + P_{\mathrm{pos}}.
 \tag{2.2}
 ]
 
 where:
 
-* (E_X \in \mathbb{R}^{N \times D}) is the patch-embedding sequence;
+* (E_0 \in \mathbb{R}^{N \times D}) is the patch-embedding sequence;
 * (W_E \in \mathbb{R}^{P^2C \times D}) is the learnable patch-projection matrix;
-* (b_E \in \mathbb{R}^{D}) is the learnable projection bias, broadcast across all patches;
+* (b_E \in \mathbb{R}^{D}) is the learnable projection bias;
 * (D) is the token embedding dimension;
 * (P_{\mathrm{pos}} \in \mathbb{R}^{N \times D}) is the positional embedding;
-* (Z_0 \in \mathbb{R}^{N \times D}) is the initial token sequence passed to the transformer encoder.
+* (Z_0 \in \mathbb{R}^{N \times D}) is the input token sequence to the transformer.
 
-A standard pre-normalization ViT encoder layer first applies Layer Normalization and Multi-Head Self-Attention, followed
-by a residual connection:
+A standard ViT encoder layer applies a pre-normalized multi-head self-attention block followed by a pre-normalized MLP
+block, with residual connections in both cases:
 
 [
-A_l =
-\operatorname{LN}(Z_{l-1}),
-\qquad
-U_l =
+U_l
+===
+
 Z_{l-1}
 
 +
 
-\operatorname{MSA}(A_l).
+\operatorname{MSA}!\left(\operatorname{LN}(Z_{l-1})\right),
 \tag{2.3}
+]
+
+[
+Z_l
+===
+
+U_l
+
++
+
+\operatorname{MLP}!\left(\operatorname{LN}(U_l)\right).
+\tag{2.4}
 ]
 
 where:
 
 * (l) is the transformer layer index;
 * (Z_{l-1}) is the input token sequence to layer (l);
+* (U_l) is the intermediate sequence after the attention block;
+* (Z_l) is the output token sequence of layer (l);
 * (\operatorname{LN}(\cdot)) denotes Layer Normalization;
-* (A_l) is the normalized token sequence;
 * (\operatorname{MSA}(\cdot)) denotes Multi-Head Self-Attention;
-* (U_l) is the token sequence after self-attention and residual addition.
+* (\operatorname{MLP}(\cdot)) denotes the feed-forward block.
 
-In the CE-enabled OSTrack backbone, candidate elimination is inserted after this attention-and-residual step:
+Multi-head self-attention allows each token to aggregate information from other tokens in the same sequence. In OSTrack,
+this is important because template and search tokens are processed together, so self-attention provides the mechanism
+through which template-search interaction occurs inside the backbone.
+
+In CE-enabled OSTrack, an additional candidate elimination (CE) step is inserted after the attention-and-residual
+operation:
 
 [
-\bar{U}_l =
+\bar{U}_l
+=========
+
 \begin{cases}
 \operatorname{CE}_l(U_l), & \text{if CE pruning is enabled at layer } l, \
-U_l, & \text{otherwise}.
+U_l, & \text{otherwise},
 \end{cases}
-\tag{2.4}
+\tag{2.5}
 ]
 
-where:
-
-* (\operatorname{CE}_l(\cdot)) denotes the candidate elimination operation at layer (l);
-* (\bar{U}_l) is the token sequence after optional CE pruning;
-* if CE is not enabled at layer (l), the sequence is left unchanged.
-
-Candidate elimination is specific to OSTrack and is only present in CE-enabled configurations. It is not part of the
-original ViT encoder block. The detailed CE scoring and pruning procedure is described separately in Section 2.3.
-
-After the optional CE step, the feed-forward MLP sublayer is applied with another residual connection:
+and the MLP block is then applied to (\bar{U}_l) instead of (U_l):
 
 [
-Z_l =
+Z_l
+===
+
 \bar{U}_l
 
 +
 
-\operatorname{MLP}
-\left(
-\operatorname{LN}(\bar{U}_l)
-\right).
-\tag{2.5}
-]
-
-where:
-
-* (\bar{U}_l) is the input to the MLP part of the encoder layer;
-* (\operatorname{MLP}(\cdot)) is the feed-forward network;
-* (Z_l) is the output token sequence of layer (l).
-
-The Multi-Head Self-Attention operation lets each token aggregate information from other tokens in the same sequence.
-For one attention head (h), it is written as:
-
-[
-Q_h = A W_Q^h,
-\qquad
-K_h = A W_K^h,
-\qquad
-V_h = A W_V^h,
-]
-
-[
-\operatorname{head}_h(A)
-========================
-
-\operatorname{softmax}
-\left(
-\frac{Q_h K_h^\top}{\sqrt{d_h}}
-\right)
-V_h,
-]
-
-[
-\operatorname{MSA}(A)
-=====================
-
-\operatorname{Concat}
-\left(
-\operatorname{head}*1(A),
-\ldots,
-\operatorname{head}*{n_h}(A)
-\right)
-W_O.
+\operatorname{MLP}!\left(\operatorname{LN}(\bar{U}_l)\right).
 \tag{2.6}
 ]
 
 where:
 
-* (A) is the normalized input sequence to the attention operation;
-* (Q_h), (K_h), and (V_h) are the query, key, and value matrices for head (h);
-* (W_Q^h), (W_K^h), and (W_V^h) are learnable projection matrices for head (h);
-* (d_h) is the feature dimension of one attention head;
-* (n_h) is the number of attention heads;
-* (W_O) is the output projection matrix after concatenating all heads.
+* (\operatorname{CE}_l(\cdot)) denotes candidate elimination at layer (l);
+* (\bar{U}_l) is the token sequence after optional CE pruning.
 
-The MLP is applied independently to each token:
-
-[
-\operatorname{MLP}(z)
-=====================
-
-W_2
-\operatorname{GELU}
-\left(
-W_1 z + b_1
-\right)
-
-+
-
-b_2.
-\tag{2.7}
-]
-
-where:
-
-* (z \in \mathbb{R}^{D}) is one token vector;
-* (W_1), (W_2), (b_1), and (b_2) are learnable MLP parameters;
-* (\operatorname{GELU}(\cdot)) is the activation function used inside the feed-forward block.
+Candidate elimination is specific to OSTrack and is not part of the original ViT architecture. It is only present when
+CE pruning is enabled. The detailed CE mechanism is described separately in Section 2.3.
 
 OSTrack applies this ViT backbone to a pair of tracking crops. Let (T) denote the template crop and (S_t) denote the
-search crop at frame (t). Their token sequences are
+search crop at frame (t). Their token sequences are denoted by (T_0) and (S_{t,0}), and the tracker processes their
+concatenation:
 
 [
-T_0 =
-\operatorname{PatchEmbed}(T) + P_T,
-\qquad
-S_{t,0} =
-\operatorname{PatchEmbed}(S_t) + P_S,
+Z_{t,0}^{\mathrm{track}} = [T_0, S_{t,0}].
+\tag{2.7}
 ]
-
-[
-Z_{t,0}^{\mathrm{track}}
-========================
-
-[T_0, S_{t,0}].
-\tag{2.8}
-]
-
-where:
-
-* (T) is the template crop from the first annotated frame;
-* (S_t) is the search crop from frame (t);
-* (\operatorname{PatchEmbed}(\cdot)) denotes patch flattening followed by linear projection;
-* (P_T) and (P_S) are positional embeddings for the template and search tokens;
-* (T_0 \in \mathbb{R}^{N_T \times D}) is the initial template-token sequence;
-* (S_{t,0} \in \mathbb{R}^{N_S \times D}) is the initial search-token sequence;
-* ([\cdot,\cdot]) denotes concatenation along the token dimension;
-* (Z_{t,0}^{\mathrm{track}}) is the combined OSTrack input sequence for frame (t).
 
 After (L) transformer layers, the backbone output is
 
@@ -568,24 +489,23 @@ After (L) transformer layers, the backbone output is
 Z_{t,L}^{\mathrm{track}}
 ========================
 
-\operatorname{ViTBackbone}
-\left(
-Z_{t,0}^{\mathrm{track}}
-\right)
-=======
+# \operatorname{ViTBackbone}!\left(Z_{t,0}^{\mathrm{track}}\right)
 
 [T_L^{(t)}, S_{t,L}].
-\tag{2.9}
+\tag{2.8}
 ]
 
 where:
 
+* (T_0 \in \mathbb{R}^{N_T \times D}) is the template-token sequence;
+* (S_{t,0} \in \mathbb{R}^{N_S \times D}) is the search-token sequence for frame (t);
+* ([,\cdot,\cdot,]) denotes concatenation along the token dimension;
 * (L) is the number of transformer layers;
-* (Z_{t,L}^{\mathrm{track}}) is the final backbone output for frame (t);
-* (T_L^{(t)}) denotes the processed template-token representation while tracking frame (t);
-* (S_{t,L}) denotes the processed search-token representation for frame (t).
+* (T_L^{(t)}) is the processed template-token representation;
+* (S_{t,L}) is the processed search-token representation.
 
-The final search-token part (S_{t,L}) is reshaped into a spatial feature map and passed to the prediction head.
+The final search-token representation (S_{t,L}) is reshaped into a spatial feature map and passed to the prediction
+head.
 
 
 ![Vision Transformer architecture.](vit_example.png)
