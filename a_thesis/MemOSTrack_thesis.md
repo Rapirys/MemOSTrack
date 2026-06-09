@@ -88,7 +88,7 @@ The main contributions of the thesis are:
 
 # 1. Background and Related Work
 
-## 1.1 Single-object tracking - Somewhat mannualy reviewed
+## 1.1 Single-object tracking
 
 Single-object tracking is a sequential computer vision problem. In the first frame of a
 video, the target is identified by a bounding box. In later frames, the tracker predicts
@@ -139,7 +139,7 @@ before deep Siamese and transformer-based trackers became the dominant direction
 | Motion blur        | Fast motion or camera movement                   | Fine details disappear from the search crop.                       |
 | Out-of-view motion | Target leaves and returns                        | The tracker state may be corrupted during absence.                 |
 
-## 1.2 From Siamese trackers to transformer trackers - Mannualy reviewed
+## 1.2 From Siamese trackers to transformer trackers
 
 The state of the art in single-object tracking has largely focused on template-to-target
 matching, where the tracker relies on visual cues from two image regions: a template
@@ -195,7 +195,7 @@ Although DiMP-style trackers are architecturally different from OSTrack, they sh
 online adaptation and sequence-level information can improve tracking robustness. This
 motivates the idea of adding recurrent memory to a template-search transformer tracker.
 
-## 1.3 Template and Search Crop Notation - Mannualy reviewd
+## 1.3 Template and Search Crop Notation
 
 This thesis follows the standard template-search notation used in many modern
 single-object trackers. The **template crop** is denoted by \(T\). It is extracted from
@@ -208,7 +208,7 @@ directly.
 Instead, it receives a smaller resized crop around the expected target location.
 This location is usually estimated from the bounding-box prediction in the previous frame.
 
-There are two main reasons what can help understand why a search crop is used instead of the whole image. First,
+There are two main reasons why a search crop is used instead of the whole image. First,
 it reduces computation by allowing the model to process only the region where the target
 is expected to appear. This is especially important for transformer-based trackers,
 because transformer-style attention is quadratic in the number of tokens [21]. For
@@ -293,10 +293,10 @@ the object may be blurred, partly hidden, or surrounded by visually similar dist
 In such cases, a tracker needs a mechanism that can dynamically encode the most relevant
 appearance cues from previous frames instead of relying only on the first template.
 
-Second, tracking is inherently temporal. A simple thought experiment makes this clear would be to
-imagine looking at a single frame of grass and trying to identify a camouflaged snake.
-In that one image, the snake may be almost indistinguishable from the background,
-however, once the video starts playing, coherent movement across consecutive frames can
+Second, tracking is inherently temporal. A simple thought experiment makes this clear.
+Imagine looking at a single frame of grass and trying to identify a camouflaged snake.
+In that one image, the snake may be almost indistinguishable from the background.
+However, once the video starts playing, coherent movement across consecutive frames can
 make the same object visible. The object has not necessarily changed its appearance, but
 the temporal context makes it easier to separate from the background. Additionally, a temporal memory can potentially
 encode motion cues. A memory state does not need
@@ -307,8 +307,8 @@ provide additional evidence about where the target is likely to be.
 
 A simple way to use temporal information would be to provide the transformer with tokens
 from previous frames together with the current search crop. However, this quickly leads
-to a temporal token explosion. For example, if one search crop contains 256 tokens, then for just
-20 previous search crops already contain 5120 tokens before adding template tokens. Even
+to a temporal token explosion. For example, if one search crop contains 256 tokens, then 20 previous search crops
+already contain 5120 tokens before adding template tokens. Even
 if previous-frame key-value representations are cached, the
 current frame must still attend to a growing set of stored tokens, increasing both memory
 usage and attention cost.
@@ -506,9 +506,9 @@ signal that these prefix tokens represent memory states rather than image patche
 In the CE-enabled backbone, memory tokens are intentionally excluded from
 candidate-elimination decisions. First, they are not pruned, because CE removes only
 search tokens. Second, they are excluded from the template mask used for CE scoring, so
-they do not directly influence which search tokens are kept or removed. Thus CE pruning is decided without
-treating them as either removable candidates or scoring tokens, so memory
-tokens can only influence it indirectly through the participation in the transformer attention.
+they do not directly influence which search tokens are kept or removed. Thus, CE pruning is decided without treating them as either removable candidates or
+scoring tokens, so memory tokens can influence it only indirectly through their
+participation in transformer attention.
 
 ![Direct transformer-based memory update.](memostrack_backbone_layers_no-gru.png)
 
@@ -535,9 +535,7 @@ sublayer is defined by a residual connection:
 $$
 X'_l =
 X_{l-1}
-
 +
-
 \operatorname{MSA}
 \left(
 \operatorname{LN}(X_{l-1})
@@ -555,10 +553,10 @@ by the equation above can carry the previous token representation forward. Howev
 adds the previous token representation and the new attention update without explicitly
 deciding how much each should contribute.
 Over long tracking sequences of tens or hundreds of frames, the lack of explicit gating can become a limitation. In the
-direct-update variant, repeated ungated updates risk gradually making the memory state
+direct-update variant, repeated ungated updates may gradually make the memory state
 drift or become less representative of the target.
 
-The second limitation is the susceptibility to gradient explosion or vanishing during Backpropagation Through Time due
+The second limitation is the susceptibility to gradient instability during Backpropagation Through Time due
 to an absence of temporal skip connections. In recurrent neural networks, there are often temporal skip connections
 between the memory representations of the same layer across time. However, in the direct-update design, recurrence is
 present only in the form of a feedback loop, where the last layer of the current frame is connected to the first layer
@@ -566,19 +564,25 @@ of the next frame. This means that when unrolling the memory tokens over $T$ fra
 gradient has to travel through all layers of the backbone for each frame:
 
 $$
-\frac{\partial L_T}{\partial M_1} = \frac{\partial L_T}{\partial M_T} \prod_{t=2}^{T} \prod_{l=1}^{L} \frac{\partial M_{t,l}}{\partial M_{t,l-1}}
+\frac{\partial L_T}{\partial M_1}
+\supset
+\frac{\partial L_T}{\partial M_T}
+\prod_{t=2}^{T}
+\prod_{l=1}^{L}
+\frac{\partial M_{t,l}}{\partial M_{t,l-1}} .
 $$
 
--where $L_T$ is the loss at frame $T$, $M_1$ and $M_T$ are the memory states at the first and last frames,
--and $\frac{\partial M_{t,l}}{\partial M_{t,l-1}}$ represents the local Jacobian matrix at layer $l$ of frame $t$.
+Here, $L_T$ is the loss at frame $T$, $M_1$ and $M_T$ are the memory states at the first and last frames,
+and $\frac{\partial M_{t,l}}{\partial M_{t,l-1}}$ represents the local Jacobian matrix at layer $l$ of frame $t$.
+This expression isolates the recurrent memory path; the full training gradient also contains paths through search tokens,
+template tokens, the prediction head, and the backbone parameters.
 
 Because the search and template tokens do not propagate their hidden states across frames,
-the temporal gradient flow relies exclusively on the partial derivatives of the memory tokens,
+the recurrent temporal path is carried by the memory tokens, represented here by
 $\frac{\partial M_{t,l}}{\partial M_{t,l-1}}$.
 Suppose we have a 12-layer transformer backbone over a 20-frame sequence;
-this chain expands to 240 sequential Jacobian matrix multiplications. This deep computational graph can quickly result
-in error accumulation, causing gradient vanishing or explosion. One way to deal with it would be an addtiona of proper
-skip connections.
+this chain expands to 240 sequential Jacobian matrix multiplications. This deep computational graph can contribute to error accumulation, causing gradient vanishing or explosion. One way to
+address this issue is to add explicit temporal skip connections.
 
 To address both memory drift and gradient instability, a more intentional architectural design is required.
 Specifically, the architecture must decouple the *proposal* of new memory from the actual *update* of the memory state,
@@ -648,15 +652,15 @@ M_{t,l} = \alpha_1 M'_{t,l}
 
 + \alpha_2 M_{t-1,l}
 + \alpha_3 M_{t,l-1},
-  \quad
-  \alpha_1 + \alpha_2 + \alpha_3 = 1.
-  $$
+\quad
+\alpha_1 + \alpha_2 + \alpha_3 = 1.
+$$
 
 Such a softmax-style gate would make the three-source structure explicit. The
 implemented version instead uses two sequential GRU updates. The GRU version is
 more recurrent in form and uses learned gates inside each update. The three-way
-gated update remains a useful future architecture to explore because it provides the mechanism that treats all 3 memory
-candidate fairly.
+gated update remains a useful future architecture to explore because it would treat all three memory
+sources symmetrically.
 
 # 4. Sequence-Based and Inference-Like Training
 
@@ -748,20 +752,12 @@ surrounded by distractors. However, this difficulty is necessary to close the ga
 goal is to train a recurrent memory module, the memory must be exposed to realistic inputs and learn to recover from
 drift.
 
-#TODO: Shorten this 2 passage, replace one approach with: The teacher-forcing mechanism was impmeneted
-Because dynamic cropping makes optimization difficult, an inference-like crop pipeline can be introduced gradually. One
-approach implemented in the training pipeline is a teacher-forcing mechanism for rollout cropping. During training, the
-code can sample a random mask based on an epoch-dependent probability. If the mask is true, the next crop is centered on
-the ground-truth box; otherwise, it is centered on the predicted box. By annealing this probability over time, the model
-can first learn a stable target representation from ground-truth-centered crops and later learn to handle prediction
-drift.
+Because dynamic cropping makes optimization more difficult, the final training pipeline used a curriculum strategy.
+During the first 40 epochs, search crops were centered using ground-truth target boxes. After this warm-up phase,
+inference-like dynamic cropping was enabled, so each next crop was generated from the model's previous prediction. This
+allowed the model to first learn stable localization before being exposed to prediction drift.
 
-However, it should be noted that during the training of the final model evaluated in the results section, this specific
-probabilistic teacher-forcing mechanism was not used. Instead, a simpler curriculum was applied: the inference-like
-dynamic rollout was turned on entirely only after the 40th epoch. Prior to that, the model was trained with standard
-ground-truth crops, making the probabilistic teacher forcing unnecessary for that specific configuration.
-
-## 4.4 Truncated Backpropagation through time in the training loop
+## 4.4 Truncated Backpropagation Through Time in the training loop
 
 The introduction of memory tokens transforms the tracker into a recurrent model, necessitating careful management of
 error backpropagation across temporal iterations. Allowing gradients to flow through an entire video sequence is both
@@ -770,7 +766,7 @@ sequences amplifies the risk of gradient instability, such as vanishing or explo
 address this is Truncated Backpropagation Through Time. In the provided implementation, the model periodically
 detaches the memory state from the computation graph after a fixed number of frames (specifically, 8 frames during
 training). This truncation limits how far the gradients can propagate backward in time, balancing the need to learn
-temporal dependencies with computational feasibility and training stability
+temporal dependencies with computational feasibility and training stability.
 
 # 5. Auxiliary Memory Supervision
 
@@ -840,9 +836,8 @@ efficient, sequence-level approach, detailed in the following section.
 ## 5.3 DiMP Target-Match Loss
 
 The second auxiliary loss is the DiMP-style target-match loss. Instead of directly testing every predicted memory
-filter on sampled feature from previous frames, this loss first constructs a stronger sequence-level target filter and
-then trains each
-predicted memory filter to match it.
+filter on sampled features from previous frames, this loss first constructs a stronger sequence-level target filter and
+then trains each predicted memory filter to match it.
 
 This idea is inspired by DiMP [18], where tracking is formulated as learning a target-specific discriminative model from
 training samples. DiMP showed that online target model prediction can use both target and background information,
@@ -862,9 +857,8 @@ filter, $f^*$, is then fitted by minimizing the following least-squares objectiv
 
 $$
 L(f) = \operatorname{mean}\left(\lVert x * f - y \rVert_2^2\right)
-
 + \lambda \operatorname{mean}\left(\lVert f \rVert_2^2\right).
-  $$
+$$
 
 Here, $f^*$ is the filter that best matches the whole training sequence under this least-squares objective. The code
 solves this using a DiMP-style steepest-descent solver with an analytic step length. The inner solver is run under
@@ -904,7 +898,7 @@ complementary, implicit regularization strategy: Template Blurring, detailed in 
 
 ## 5.4 Template Blurring
 
-To complement the explicit auxiliary losses, the thesis also explores  **template blurring** as an implicit memory-supervision
+To complement the explicit auxiliary losses, the thesis also explores **template blurring** as an implicit memory-supervision
 strategy. Because the baseline OSTrack architecture already possesses a highly effective template-search matching
 pathway, the model can often solve the training task without utilizing the newly introduced memory tokens. Template
 blurring artificially degrades the reliability of the initial template, forcing the tracker to rely on the recurrent
@@ -919,18 +913,18 @@ utilize the historical target information stored in the memory tokens.
 
 During training, template corruption is applied randomly to a subset of frames within the sampled sequence. A
 critical design choice is that the first few search frames are strictly excluded from corruption. This allows
-the tracker to process clean frames initially, which to initialise a reliable memory state
-representation needed for tracking with corruptedtemplate. Consequently, this mechanism is only applied to sufficiently long training sequences to
-ensure a proper balance between clean and corrupted inputs.
+the tracker to process clean frames initially and build a reliable memory state before template corruption is introduced.
+Consequently, this mechanism is only applied to sufficiently long training sequences to ensure a proper balance between
+clean and corrupted inputs.
 
 Template corruption is strictly a training-time regularization technique; during inference, the tracker always receives
-the clean initial template. Furthermore, in these experiments.
+the clean initial template.
 
 The primary advantage of template blurring is its architectural simplicity. It requires no additional loss heads, inner
 optimization solvers, or pseudo-labels. The tracker is optimized entirely through the standard localization losses,
 while the input corruption naturally shifts the network's internal reliance toward the memory stream. Furthermore,
 because it alters the actual tracking pathway rather than just an intermediate representation, improved performance on
-corrupted frames directly indicates that the memory tokens are successfully providing target appearance cues.
+corrupted frames suggests that the memory tokens may provide target appearance cues.
 
 As a result, template blurring serves as a controlled training condition that weakens the dominant template
 matching, offering a simple and implicit alternative to explicit auxiliary losses.
@@ -958,7 +952,7 @@ mechanism.
 
 The training pipeline employs a causal consecutive sequence sampler under a two-stage curriculum. To stabilize early
 optimization, the first 40 epochs utilize ground-truth-centered crops with random jitter over 20-frame rollouts.
-After, inference-like dynamic cropping is fully enabled, and the rollout length is reduced to 15 frames.
+After this stage, inference-like dynamic cropping is fully enabled, and the rollout length is reduced to 15 frames.
 
 
 ## 6.3 Hyperparameter and optimizer considerations
@@ -992,11 +986,11 @@ Rate at 0.75 (SR0.75), as defined in Section 1.4.
 The comparison is made against reported OSTrack-256 + CE and OSTrack-384 + CE
 baselines. The 256 baseline is the closest architectural comparison because it uses the
 same search resolution. The 384 baseline is included as a stronger high-resolution
-reference. Because MemOSTrack the proposed model introduces several changes simultaneously, the
+reference. Because the proposed MemOSTrack model introduces several changes simultaneously, the
 final result should not be interpreted as identifying a single cause. A complete study
-would include ablations, such as memory tokens without dynamic cropping, dynamic
+would include ablations such as memory tokens without dynamic cropping, dynamic
 cropping without memory, one GRU instead of two GRUs, and different memory loss
-weights are is left for future work .
+weights. These experiments are left for future work.
 
 # 7. Results and Discussion
 
@@ -1009,14 +1003,13 @@ CE baseline achieves AO 0.737, SR0.50 0.832, and SR0.75 0.708 \[13\].
 
 *Table 7.1 - Final quantitative comparison on GOT-10k.*
 
-| **Method**          | **AO** | **SR0.50** | **SR0.75** | **ΔAO** | **ΔSR0.50** | **ΔSR0.75** |
-|---------------------|-------:|-----------:|-----------:|--------:|------------:|------------:|
-| MemOSTrack-256 + CE |  0.729 |      0.823 |      0.693 |       - |           - |           - |
-| OSTrack-256 + CE    |  0.710 |      0.804 |      0.682 |  +0.019 |      +0.019 |      +0.011 |
-| OSTrack-384 + CE    |  0.737 |      0.832 |      0.708 |  -0.008 |      -0.009 |      -0.015 |
+| **Method**          | **AO** | **SR0.50** | **SR0.75** |
+|---------------------|-------:|-----------:|-----------:|
+| OSTrack-256 + CE    |  0.710 |      0.804 |      0.682 |
+| MemOSTrack-256 + CE |  0.729 |      0.823 |      0.693 |
+| OSTrack-384 + CE    |  0.737 |      0.832 |      0.708 |
 
-The delta columns indicate the absolute performance differences between MemOSTrack-256 + CE and the respective
-baselines. The final configuration improves upon the reported same-resolution OSTrack-256 + CE baseline across all three
+The final configuration improves upon the reported same-resolution OSTrack-256 + CE baseline across all three
 metrics, with gains of +0.019 in AO, +0.019 in SR0.50, and +0.011 in SR0.75. Because only one final configuration was
 fully evaluated, this result should be interpreted as preliminary evidence for the effectiveness of the complete
 MemOSTrack training pipeline, rather than isolated proof that the recurrent memory alone caused the gain.
@@ -1043,7 +1036,7 @@ training IoU climbs to approximately 0.870.
 Between epochs 21 and 40, template blurring was introduced to the pipeline. During this phase, the standard training IoU
 remained stable and high. More importantly, the model's performance on specifically corrupted templates—tracked via the
 separate `Blur/IoU` metric—steadily improved from 0.849 at epoch 21 to a peak of 0.875 at epoch 39. This upward trend
-indicates that the network successfully adapted to the degraded initial template, forcing it to rely more heavily on the
+indicates that the network adapted to the degraded initial template, which may have encouraged greater use of the
 recurrent memory state to maintain accurate localization.
 
 At epoch 41, template blurring was disabled, and the training pipeline transitioned to the inference-like dynamic
@@ -1147,38 +1140,31 @@ hide.
 
 # Conclusion
 
-This thesis investigated the integration of recurrent memory tokens into OSTrack, a
-one-stream transformer tracker for visual object tracking. The proposed MemOSTrack model
-extends the original OSTrack token sequence with memory tokens and updates them using a
-two-stage GRU mechanism. The first GRU combines the current candidate memory with memory
-from the previous frame, while the second GRU combines the result with memory from the
-previous transformer layer. This design introduces an explicit recurrent memory stream
-while preserving the main structure of the OSTrack backbone.
+This thesis investigated the integration of recurrent memory tokens into OSTrack. The
+proposed MemOSTrack model extends the original one-stream transformer tracker with
+memory tokens and a two-stage GRU update mechanism. The first GRU combines current
+candidate memory with memory from the previous frame, while the second GRU combines the
+result with memory from the previous transformer layer. This design was intended to
+provide both temporal continuity and layer-wise memory refinement.
 
-The work also required substantial changes to the training pipeline. The original
+The work also required a substantial rewrite of the training pipeline. The original
 pair-based sampling strategy was replaced by sequence-based sampling so that memory
-could be propagated through ordered video frames. The final training pipeline further
-introduced dynamic search cropping, where each new search crop is generated from the
-previous prediction rather than from the current ground-truth target position. This made
-training more similar to inference, although it also made optimization more difficult.
+could be propagated through ordered video frames. The final version further introduced
+dynamic search cropping, where the search crop is generated from the previous prediction
+rather than from the current ground truth. This made training more similar to inference,
+although also more difficult.
 
-The thesis also explored additional training strategies for making the memory pathway
-useful. Auxiliary memory loss heads were considered because a strong OSTrack baseline
-can solve many training examples through the original template-search pathway and may
-therefore ignore newly added memory tokens. Template blurring was also explored as a
-complementary regularization strategy to reduce over-reliance on the clean initial
-template and encourage the use of recurrent memory.
+Auxiliary memory loss heads were explored because a strong OSTrack baseline can ignore
+newly added memory tokens. Template blurring was considered as a complementary solution
+to reduce over-reliance on the clean initial template and encourage use of recurrent
+memory.
 
-The final MemOSTrack-256 + CE model achieved AO 0.729, SR0.50 0.823, and SR0.75 0.693
-on GOT-10k. This improves upon the reported same-resolution OSTrack-256 + CE baseline,
-which indicates that the complete memory-augmented training pipeline can be beneficial
-under the evaluated configuration. However, the model does not outperform the stronger
-higher-resolution OSTrack-384 + CE baseline. Since several changes were introduced
-together, the final result should not be interpreted as isolated proof that recurrent
-memory alone caused the improvement. Instead, it provides a useful foundation for future
-work on memory supervision, gated update mechanisms, dynamic training curricula,
-resolution scaling, and ablation studies for transformer-based visual tracking.
-
+The final MemOSTrack-256 + CE model achieved AO 0.729, SR0.50 0.823, and SR0.75
+0.693. This improves on the reported same-resolution OSTrack-256 + CE baseline, but it
+does not outperform the stronger higher-resolution OSTrack-384 + CE baseline. The
+result provides a useful foundation for future work on memory supervision, update
+mechanisms, resolution scaling, and training curricula for transformer-based visual
+tracking.
 
 # References
 
@@ -1263,16 +1249,16 @@ Visual Tracking,' ECCV, 2022.
 ## Extending OSTrack with GRU-Based Memory Tokens for Visual Object Tracking
 
 This thesis investigates the integration of recurrent memory tokens into OSTrack, a
-one-stream transformer tracker for visual object tracking. The proposed MemOSTrack model
-extends the template-search token sequence with memory tokens and updates them using a
-two-stage GRU mechanism that combines previous-frame and previous-layer memory. The
-training pipeline was rewritten from independent pair-based sampling to ordered video
-sequence sampling, and it was further extended with dynamic search cropping to better
-match the inference setting. Auxiliary memory loss heads and template blurring were also
-explored as strategies for encouraging the model to use the added memory pathway. On
-GOT-10k, the final MemOSTrack-256 + CE model achieved AO 0.729, SR0.50 0.823, and
-SR0.75 0.693. It improved upon the reported same-resolution OSTrack-256 + CE baseline,
-but remained slightly below the stronger reported OSTrack-384 + CE baseline.
+one-stream transformer tracker. The proposed MemOSTrack model adds memory tokens to
+the template-search token sequence and updates them with a two-stage GRU mechanism using
+previous-frame and previous-layer memory. The training pipeline was rewritten from
+pair-based sampling to ordered video sequence sampling and further extended with dynamic
+search cropping to better match inference. Auxiliary memory loss heads and template
+blurring were explored to encourage the model to use memory. The final model achieved AO
+0.729, SR0.50 0.823, and SR0.75 0.693. It exceeded the reported same-resolution
+OSTrack-256 + CE baseline, but remained slightly below the stronger reported OSTrack-384
+
++ CE baseline.
 
 Keywords: visual object tracking, OSTrack, transformer, GRU, memory tokens, dynamic
 cropping
@@ -1281,35 +1267,31 @@ cropping
 
 ## Extending OSTrack with GRU-Based Memory Tokens for Visual Object Tracking
 
-This thesis studies whether a transformer-based visual object tracker can benefit from
-explicit recurrent memory. OSTrack is selected as the baseline because it is a strong
-one-stream tracker that jointly processes template and search tokens inside a single
-transformer backbone. The proposed MemOSTrack model adds memory tokens to this token
-sequence. Each transformer layer first produces a candidate memory representation, after
-which a two-stage GRU update combines the candidate with previous-frame memory and
-previous-layer memory.
+The thesis studies whether a transformer-based tracker can benefit from explicit
+recurrent memory. OSTrack is selected as the baseline because it is a strong one-stream
+tracker that jointly processes template and search tokens. The proposed MemOSTrack
+model inserts memory tokens into this token sequence. A transformer layer first produces
+candidate memory, after which a two-stage GRU update combines the candidate with
+previous-frame memory and previous-layer memory.
 
 A major part of the work is the training pipeline. The original pair-based sampler was
-not sufficient for recurrent memory, because memory must be propagated through ordered
-frames from the same video. Therefore, the sampler was rewritten to return causal
-consecutive search sequences. The final pipeline also introduced dynamic search
-cropping, where each next search crop is produced from the previous prediction rather
-than from the current ground-truth box. This makes training closer to real inference,
-where the tracker must operate using its own previous predictions.
+not sufficient because recurrent memory needs ordered video frames. Therefore, the
+sampler was rewritten to return causal consecutive search sequences. The final pipeline
+also uses dynamic search cropping, where each next search crop is produced from the
+previous prediction. This makes training closer to real inference.
 
-The thesis also explores auxiliary memory supervision and template blurring. Auxiliary
-memory loss heads were considered because a strong OSTrack baseline can solve many
-training samples through the original template-search pathway and may ignore the added
-memory tokens. Template blurring was explored as a complementary regularization strategy
-that weakens the initial template and encourages the use of temporal information.
+The thesis also discusses memory loss heads and template blurring. Memory loss heads
+were introduced to prevent the model from ignoring memory tokens. Template blurring was
+explored to reduce over-reliance on the clean initial template and encourage the use of
+temporal memory.
 
-The final evaluation shows that MemOSTrack-256 + CE achieved AO 0.729, SR0.50 0.823,
-and SR0.75 0.693 on GOT-10k. These results are higher than the reported OSTrack-256 +
-CE baseline, but lower than the reported OSTrack-384 + CE baseline. The main conclusion
-is that the final MemOSTrack configuration improves the same-resolution 256 CE setting,
-but does not yet surpass the higher-resolution 384 CE model. Further optimization and
-ablation studies are required to separate the effects of recurrent memory, dynamic
-cropping, candidate elimination, training curriculum, and resolution.
+The final evaluation shows that MemOSTrack-256 + CE achieved AO 0.729, SR0.50
+0.823, and SR0.75 0.693. These results are higher than the reported OSTrack-256 + CE
+baseline, but lower than the reported OSTrack-384 + CE baseline. The main conclusion is
+that the final MemOSTrack configuration improves the same-resolution 256 CE setting, but
+does not yet surpass the higher-resolution 384 CE model. Further optimization and
+ablation studies are required to separate the effects of memory, dynamic cropping,
+candidate elimination, and resolution.
 
 # Abbreviations
 
