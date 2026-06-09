@@ -422,27 +422,41 @@ where:
 \item \(X_p\) is the matrix containing all flattened patch vectors.
 \end{itemize}
 
-The flattened patches are projected into a \(D\)-dimensional embedding space, and positional embeddings are added:
-
+The flattened patches are projected into a \(D\)-dimensional embedding space, and
+positional embeddings are added:
 \begin{equation}
 \begin{aligned}
-E_X &= X_p W_E + b_E,
-\qquad
-Z_0 = E_X + P_{\mathrm{pos}}.
+E_X &= X_p W_E + b_E,\\
+Z_0 &= E_X + P_{\mathrm{pos}}.
 \end{aligned}
 \tag{2.2}
 \end{equation}
 
+\vspace{-0.6em}
+\noindent\hspace*{1.2em}
+\begin{minipage}{0.90\textwidth}
+\footnotesize
 where:
+\vspace{0.2em}
 
-\begin{itemize}
-\item \(E_X \in \mathbb{R}^{N \times D}\) is the patch-embedding sequence;
-\item \(W_E \in \mathbb{R}^{P^2C \times D}\) is the learnable patch-projection matrix;
-\item \(b_E \in \mathbb{R}^{D}\) is the learnable projection bias, broadcast across all patches;
-\item \(D\) is the token embedding dimension;
-\item \(P_{\mathrm{pos}} \in \mathbb{R}^{N \times D}\) is the positional embedding;
-\item \(Z_0 \in \mathbb{R}^{N \times D}\) is the initial token sequence passed to the transformer encoder.
-\end{itemize}
+\begin{list}{\(\bullet\)}{
+    \setlength{\leftmargin}{1.4em}
+    \setlength{\labelwidth}{0.8em}
+    \setlength{\labelsep}{0.5em}
+    \setlength{\itemsep}{0.05em}
+    \setlength{\parsep}{0pt}
+    \setlength{\topsep}{0.25em}
+    \setlength{\partopsep}{0pt}
+}
+\item \(X \in \mathbb{R}^{H \times W \times C}\) is the input image crop;
+\item \(H\) and \(W\) are the height and width of the crop;
+\item \(C\) is the number of image channels;
+\item \(P\) is the patch size, assuming that \(H\) and \(W\) are divisible by \(P\);
+\item \(N\) is the number of patches;
+\item \(x_i \in \mathbb{R}^{P^2 C}\) is the flattened vector of the \(i\)-th patch;
+\item \(X_p\) is the matrix containing all flattened patch vectors.
+\end{list}
+\end{minipage}
 
 A standard pre-normalization ViT encoder layer first applies Layer Normalization and Multi-Head Self-Attention, followed
 by a residual connection:
