@@ -645,11 +645,12 @@ three available memory sources:
 
 $$
 M_{t,l} = \alpha_1 M'_{t,l}
+
 + \alpha_2 M_{t-1,l}
 + \alpha_3 M_{t,l-1},
-\quad
-\alpha_1 + \alpha_2 + \alpha_3 = 1.
-$$
+  \quad
+  \alpha_1 + \alpha_2 + \alpha_3 = 1.
+  $$
 
 Such a softmax-style gate would make the three-source structure explicit. The
 implemented version instead uses two sequential GRU updates. The GRU version is
@@ -760,61 +761,16 @@ probabilistic teacher-forcing mechanism was not used. Instead, a simpler curricu
 dynamic rollout was turned on entirely only after the 40th epoch. Prior to that, the model was trained with standard
 ground-truth crops, making the probabilistic teacher forcing unnecessary for that specific configuration.
 
-## 4.3 Coordinate transformations in dynamic cropping
+## 4.4 Truncated Backpropagation through time in the training loop
 
-Dynamic cropping requires careful coordinate handling. The tracker predicts a box in the
-coordinate system of the search crop, but the next crop must be produced in the
-coordinate system of the original image. Therefore, each crop operation must store the
-mapping between image coordinates and crop coordinates. If this mapping is inconsistent,
-the next search crop will be centered incorrectly even when the prediction inside the
-current crop is accurate.
-
-The practical pipeline contains three coordinate spaces. The first is the original image
-space, where dataset annotations are defined. The second is the raw crop space, where a
-rectangular region is extracted around the current tracker state. The third is the
-resized network input space, for example \(256 \times 256\) pixels for the search image.
-The model prediction is produced in the network input space and must be mapped back
-through the resize operation and crop offset.
-
-This is one of the reasons why dynamic cropping is more complex than static
-ground-truth cropping. With static cropping, the crop can be generated from known
-annotations before the forward pass. With dynamic cropping, the crop depends on a
-prediction that is only available after the forward pass. The training loop must
-therefore interleave model execution, loss computation, coordinate conversion, and crop
-generation.
-
-$$
-\hat{B}^{image}_t = \operatorname{transform}^{-1}(\hat{B}^{crop}_t).
-$$
-
-#TODO: evaluate if this 2 paragraphs are needed.
-Finally, implementing this dynamic loop requires careful coordinate handling. The tracker predicts a box in the
-normalized coordinate system of the resized search crop, but the next crop must be extracted from the full image
-canvas. Therefore, the prediction is mapped back to image coordinates,
-$\hat{B}^{image}_t = \operatorname{transform}^{-1}(\hat{B}^{crop}_t)$, before it is used as the next crop state.
-Unlike static ground-truth cropping, where crops can be prepared before the forward pass, dynamic cropping interleaves
-model execution, coordinate conversion, and crop generation at every time step.
-
-In the implementation, this crop generation is performed as batched tensor sampling with `grid_sample`. Since the
-training batch is moved to the training device before the actor is called, the inference-like crops are generated on
-GPU during CUDA training. This keeps the recurrent crop pipeline practical while preserving the same crop-state logic
-used at inference time.
-
-## 4.4 Backpropagation through time in the training loop
-
-Sinve in MemOSTrack, the recurrent memory state is passed from one search frame to the next and updated via layer-wise
-GRU connections across both transformer depth and time. During training, reusing the memory state from the previous
-frame creates a continuous temporal computation graph.
-
-Keeping this graph for the whole sampled sequence is computationally expensive. Unrolling the ViT backbone with memory
-tokens and per-layer GRU updates over many frames would cause GPU memory usage to grow quickly and make optimization
-unstable due to gradient accumulation. For this reason, the implementation uses truncated BPTT.
-
-The training loop periodically detaches the memory state after a configured number of recurrent steps. Detaching keeps
-the numerical memory value—allowing the tracker to still receive temporal context from previous frames—but cuts the
-gradient graph at that point. Gradients are therefore propagated through a limited window of memory updates instead of
-the full rollout. This provides a practical compromise: the memory module can learn from short temporal dependencies
-while keeping the computation graph small enough to train efficiently.
+The introduction of memory tokens transforms the tracker into a recurrent model, necessitating careful management of
+error backpropagation across temporal iterations. Allowing gradients to flow through an entire video sequence is both
+computationally expensive and highly demanding on GPU memory. Additionally, unrolling the computational graph over long
+sequences amplifies the risk of gradient instability, such as vanishing or exploding gradients. A standard approach to
+address this is Truncated Backpropagation Through Time. In the provided implementation, the model periodically
+detaches the memory state from the computation graph after a fixed number of frames (specifically, 8 frames during
+training). This truncation limits how far the gradients can propagate backward in time, balancing the need to learn
+temporal dependencies with computational feasibility and training stability
 
 # 5. Auxiliary Memory Supervision
 
@@ -826,54 +782,70 @@ training task using template and search tokens alone, the new memory tokens may 
 weak or unimportant gradients. This creates the risk that the memory tokens collapse to an uninformative representation
 or are ignored by the prediction pathway.
 
-This is a common issue when adding auxiliary modules to strong neural networks. The
-optimization process often follows the dominant low-loss pathway. If the template is
-clean and the search crop is well-centered, that pathway may rely on the original
-OSTrack features. The memory branch may then have little effect on the final prediction.
+This is a common issue when adding auxiliary modules to strong neural networks. The optimization process often follows
+the dominant low-loss pathway. If the template is clean and the search crop is well-centered, that pathway may rely
+entirely on the original OSTrack features. The memory branch may then have little to no effect on the final prediction.
 
-The project therefore explored auxiliary memory supervision. The goal was to make memory
-tokens directly useful for prediction rather than merely present in the token sequence.
+The thesis explored auxiliary memory supervision. The goal was to force the memory tokens to encode
+representations that are directly useful for prediction, rather than being present in the token sequence.
 
-## 5.2 Direct Memory Filter Loss
+## 5.2 Sampled Discriminative Filter Loss
 
-The first auxiliary loss explored in this work was the **Direct Memory Filter Loss**. Its
-purpose was to make the memory branch produce filters that are directly useful for target
-localization. For a predicted memory filter $f_t$, a sampled search feature $x_j$, and a
-ground-truth heatmap $y_j$, the filter response is:
+The first auxiliary loss was designed to explicitly force the memory tokens to encode spatial representations capable of
+localizing the target. To achieve this, an auxiliary **Memory Head** was introduced to the architecture. This
+lightweight multi-layer perceptron takes only the recurrent memory tokens as input and projects them into a spatial
+convolutional filter. Rather than allowing the memory tokens to remain abstract, this approach evaluates their
+discriminative power by testing how well this predicted filter can localize the target across the video sequence.
+
+Let $f_t$ denote the memory filter predicted by the memory head at frame $t$. To evaluate this filter, a random subset
+of frames, denoted by the index set $\mathcal{S}_t$, is sampled from the current training sequence. For each sampled
+frame $j \in \mathcal{S}_t$, the filter $f_t$ is applied to the corresponding search region feature map $x_j$ via
+cross-correlation to produce a spatial response map:
 
 $$
 s_{t,j} = x_j * f_t.
 $$
 
-The auxiliary loss compares this response with the target heatmap and adds a small filter
-regularization term:
+The objective is to minimize the discrepancy between this predicted response map and the ground-truth Gaussian target
+heatmap $y_j$. The loss for the filter at frame $t$ is formulated as the Mean Squared Error (MSE) over the sampled
+subset, combined with an $L_2$ regularization penalty on the filter weights:
 
 $$
-L_{\text{direct}} = \operatorname{mean}\left(\lVert s_{t,j} - y_j \rVert_2^2\right)
+L_t = \frac{1}{|\mathcal{S}_t|} \sum_{j \in \mathcal{S}_t} \lVert x_j * f_t - y_j \rVert_2^2 + \lambda \lVert f_t \rVert_2^2.
+$$
 
-+ \lambda \operatorname{mean}\left(\lVert f_t \rVert_2^2\right).
-  $$
+Here, $\lambda$ is a hyperparameter controlling the strength of the weight regularization, which prevents the filter
+values from growing unbounded. The total auxiliary loss is the average of $L_t$ across all frames in the sequence that
+produce a memory filter.
 
-Here, $\lambda$ corresponds to `FILTER_REG`. In the implementation, a limited number of
-search frames is sampled using `FILTER_LOSS_FRAMES`. The search features are detached on
-purpose, so the auxiliary gradient is directed mainly through the memory tokens and the
-memory-filter prediction path rather than through the backbone.
+A critical design choice in this algorithm is the treatment of the search features $x_j$. During the loss computation,
+these features are explicitly detached from the computational graph. If the search features were not detached, gradients
+from this auxiliary loss would flow backward through them and into the ViT backbone for the sampled frames. That would
+force the backbone to modify its general visual representations to accommodate the memory loss. By detaching the
+features, the optimization gradients are forced to propagate exclusively backward through the predicted filter $f_t$,
+the auxiliary memory head, and into the recurrent memory tokens. This ensures that the loss strictly supervises the
+memory pathway without inadvertently altering the primary feature extractor.
 
-The strength of this loss is that it tests the memory filter in a direct tracking-like
-way: the filter is applied to search features and should produce a high response near
-the target. However, the method has two important limitations. First, supervision depends
-on sampled frames, so the signal can be noisy. Second, applying every predicted filter to
-every previous frame would require approximately $O(T^2)$ filter-feature applications for
-a sequence of length $T$. This motivated the more compact DiMP-style target-match loss.
+The primary strength of this loss is that it evaluates the memory representation in a direct, tracking-oriented manner:
+the memory state must generate a filter that yields a high response at the target location and a low response on the
+background, even when applied to frames from different temporal steps.
+
+However, this approach presents two significant limitations. First, because the supervision relies on a randomly
+sampled subset of frames ($\mathcal{S}_t$), the training signal can exhibit high variance and noise. Second, the
+computational complexity scales poorly. Evaluating every predicted filter against every other frame in a sequence of
+length $T$ would require $O(T^2)$ cross-correlation operations. While random sampling reduces this
+to $O(T \cdot |\mathcal{S}_t|)$, it remains computationally heavy. These limitations motivated the development of a more
+efficient, sequence-level approach, detailed in the following section.
 
 ## 5.3 DiMP Target-Match Loss
 
 The second auxiliary loss is the DiMP-style target-match loss. Instead of directly testing every predicted memory
-filter on sampled frames, this loss first constructs a stronger sequence-level target filter and then trains each
+filter on sampled feature from previous frames, this loss first constructs a stronger sequence-level target filter and
+then trains each
 predicted memory filter to match it.
 
-This idea is inspired by DiMP, where tracking is formulated as learning a target-specific discriminative model from
-training samples. DiMP shows that online target model prediction can use both target and background information,
+This idea is inspired by DiMP [18], where tracking is formulated as learning a target-specific discriminative model from
+training samples. DiMP showed that online target model prediction can use both target and background information,
 instead of only matching a target template [18].
 
 The proposed DiMP-style target-match loss is not a reimplementation of the full DiMP tracker. Instead, it borrows the
@@ -883,19 +855,10 @@ target classifier used for tracking. The simplification is intentional: the goal
 head, but to provide direct supervision that encourages the added memory tokens to encode information useful for target
 discrimination.
 
-The implementation first collects all available detached search features:
-
-$$
-x_1, \dots, x_T
-$$
-
-and their ground-truth heatmaps:
-
-$$
-y_1, \dots, y_T.
-$$
-
-It then fits a target filter $f^*$ by minimizing:
+To construct the pseudo-label, the method first collects all available detached search features, $x_1, \dots, x_T$, and
+their corresponding ground-truth heatmaps, $y_1, \dots, y_T$. An initial filter is formed by taking the mean of the
+detached memory filters predicted by the auxiliary memory head across the sequence. A sequence-level target
+filter, $f^*$, is then fitted by minimizing the following least-squares objective:
 
 $$
 L(f) = \operatorname{mean}\left(\lVert x * f - y \rVert_2^2\right)
@@ -908,7 +871,8 @@ solves this using a DiMP-style steepest-descent solver with an analytic step len
 `torch.no_grad()`, so the optimized target filter is treated as a pseudo-label rather than as a fully differentiable
 inner optimization process.
 
-After computing the target filter, the predicted memory filters are trained to match it:
+After computing the target filter, the memory filters predicted by the memory head are trained to match it. The final
+auxiliary loss is the mean squared difference between each predicted filter and the optimized target filter:
 
 $$
 L_{\text{match}} = w_{\text{match}} \frac{1}{M} \sum_i \lVert f_i - f^* \rVert_2^2.
@@ -921,138 +885,55 @@ where:
 - $w_{\text{match}}$ is `FILTER_MATCH_WEIGHT`.
 - $M$ is the number of predicted memory filters.
 
-In the implementation, the initial filter is the mean of detached predicted memory filters, the target filter is
-optimized over all common feature frames, and the final loss is the mean squared difference between each predicted
-filter and the optimized target filter.
+This loss has several advantages over the sampled discriminative filter loss described in Section 5.2. It provides the
+memory branch with a more stable target, because $f^*$ is estimated from the full sequence rather than a small random
+sample. It trades the computation of cross-correlation on every frame during loss evaluation for the upfront
+optimization of a single sequence-level correlation filter. While running the inner optimization solver is a heavier
+operation, it ultimately becomes faster than the quadratic complexity emerging from recomputing cross-correlations
+between every predicted filter and all previous frames. Furthermore, the loss encourages temporal consistency, as all
+memory filters are pulled toward the same sequence-level target model.
 
-This loss has several advantages over the direct loss. It gives the memory branch a more stable target, because $f^*$
-is estimated from the full sequence rather than from a small random sample. It also avoids the quadratic cost of
-applying every predicted filter to every previous frame. With $K$ inner optimization steps and $T$ frames, the fitting
-cost is closer to:
+Despite its computational advantages, the target-match loss introduces notable trade-offs. Primarily, it relies heavily
+on the quality of the pseudo-label. If the inner optimization yields an inaccurate filter $f^*$—such as during heavy
+occlusion—the memory tokens are penalized for imitating a flawed model. Furthermore, this supervision is highly
+prescriptive. By forcing memory tokens to project into a spatial correlation filter, it restricts the transformer from
+freely encoding other potentially useful temporal cues, such as motion or abstract relations.
 
-$$
-O(KT)
-$$
-
-instead of:
-
-$$
-O(T^2)
-$$
-
-when $K$ is fixed and much smaller than $T$. The loss also encourages temporal consistency, because all memory filters
-are pulled toward the same sequence-level target model.
-
-The main weakness is that the method depends on the quality of the fitted target filter. If $f^*$ is inaccurate, all
-predicted memory filters are encouraged to imitate a poor pseudo-target. It is also more complex than the direct loss,
-because it requires an inner optimization procedure. Finally, the loss supervises filter similarity rather than directly
-measuring the final tracking output, so it remains an auxiliary signal rather than a replacement for the main GIoU, L1,
-and localization losses. In the training actor, the memory loss is added to the main tracking objective using the
-configured memory loss weight.
+Because of the architectural complexity and constrained nature of explicit auxiliary losses, the project also explored a
+complementary, implicit regularization strategy: Template Blurring, detailed in the following section.
 
 ## 5.4 Template Blurring
 
-Due to the added complexity of explicit auxiliary memory losses, the final approach uses **template blurring** as a
-simpler memory-supervision strategy. OSTrack is already a strong one-stream tracker, where template and search features
-are jointly processed through bidirectional information flow [13]. Therefore, the model
-may solve the training task without strongly relying on the added memory tokens. Template
-blurring is intended to reduce the reliability of the
-template pathway and encourage the tracker to use memory tokens as an additional source of target appearance
-information.
+To complement the explicit auxiliary losses, the thesis also explores  **template blurring** as an implicit memory-supervision
+strategy. Because the baseline OSTrack architecture already possesses a highly effective template-search matching
+pathway, the model can often solve the training task without utilizing the newly introduced memory tokens. Template
+blurring artificially degrades the reliability of the initial template, forcing the tracker to rely on the recurrent
+memory tokens as an alternative source of target appearance information.
 
-Let the original template be
+Let $z$ denote the original template and $\tilde{z}$ the corrupted template. Two corruption modes were considered: a blur
+mode ($\tilde{z} = \text{Blur}(z)$) using repeated average pooling, and a zero-masking mode ($\tilde{z} = 0$). The blur
+mode is less aggressive, removing high-frequency appearance details while preserving coarse structural cues. However,
+because the model might still recover useful information from a blurred template, zero-masking was also introduced. By
+completely removing the template's visual features, zero-masking creates maximum pressure on the network to extract and
+utilize the historical target information stored in the memory tokens.
 
-$$
-z
-$$
+During training, template corruption is applied randomly to a subset of frames within the sampled sequence. A
+critical design choice is that the first few search frames are strictly excluded from corruption. This allows
+the tracker to process clean frames initially, which to initialise a reliable memory state
+representation needed for tracking with corruptedtemplate. Consequently, this mechanism is only applied to sufficiently long training sequences to
+ensure a proper balance between clean and corrupted inputs.
 
-and the corrupted template be
+Template corruption is strictly a training-time regularization technique; during inference, the tracker always receives
+the clean initial template. Furthermore, in these experiments.
 
-$$
-\tilde{z}.
-$$
+The primary advantage of template blurring is its architectural simplicity. It requires no additional loss heads, inner
+optimization solvers, or pseudo-labels. The tracker is optimized entirely through the standard localization losses,
+while the input corruption naturally shifts the network's internal reliance toward the memory stream. Furthermore,
+because it alters the actual tracking pathway rather than just an intermediate representation, improved performance on
+corrupted frames directly indicates that the memory tokens are successfully providing target appearance cues.
 
-Two corruption modes were considered. In the first mode, the template is blurred:
-
-$$
-\tilde{z} = \text{Blur}(z).
-$$
-
-In the second mode, the template is replaced by zeros:
-
-$$
-\tilde{z} = 0.
-$$
-
-The blur mode is less aggressive because it removes high-frequency appearance details while preserving coarse target
-structure. However, it may still allow the model to recover useful information from the degraded template itself. For
-this
-reason, zero replacement was also considered. The zero mode removes the template appearance completely, making it harder
-for the model to solve the task by reconstructing or compensating for the corrupted template. This creates stronger
-pressure to use the information stored in memory tokens.
-
-The implementation is controlled by a `MemoryTemplateCorruption` module. It reads configuration values for whether
-corruption is enabled, the corruption mode, the number of corrupted frames, the blur kernel size, and the number of blur
-passes. The implementation supports two modes: `blur` and `zero`. In `zero` mode, the corrupted template is created with
-`torch.zeros_like`. In `blur` mode, repeated average pooling is applied to the template tensor. The blur kernel size
-must
-be an odd integer greater than one, and the number of blur passes must be positive.
-
-A key implementation detail is that the first two search frames are never selected for template corruption. This is
-controlled by
-
-$$
-\texttt{skip\_first} = 2.
-$$
-
-The selected corruption candidates therefore start only after the first two search frames. This design allows the
-tracker
-to process several clean frames before template corruption is introduced, which is useful for establishing an initial
-memory state. The module samples a fixed number of frame indices from the remaining candidate frames independently for
-each batch element and stores the result in a boolean blur mask.
-
-The method also requires sufficiently long training sequences. The implementation checks that the number of search
-frames
-is greater than
-
-$$
-2n_{\text{blur}} + \texttt{skip\_first},
-$$
-
-where \(n_{\text{blur}}\) is the configured number of frames to corrupt. If this condition is not satisfied, validation
-raises an error, or the sample is skipped during mask construction. This check avoids applying corruption in very short
-sequences where there are not enough clean frames and later candidate frames.
-
-During training, the actor builds a blur mask for the full sequence. During evaluation, the blur mask is set to all
-false,
-so template corruption is only a training-time mechanism. For each selected frame, the corrupted template is substituted
-for the clean template before the network forward pass. For unselected samples, the original template is kept. Template
-blurring is also made mutually exclusive with the explicit auxiliary memory losses, which avoids mixing two different
-memory-supervision mechanisms.
-
-The main advantage of template blurring is its simplicity. It does not require an additional memory-filter objective,
-a DiMP-style inner solver, or a pseudo-label for memory filters. The tracker is still trained using the standard
-tracking
-losses, while the input corruption changes which information sources are reliable. This makes the method easier to
-implement and analyze than the auxiliary losses described in the previous sections.
-
-A second advantage is that template blurring affects the actual tracking pathway. The auxiliary filter losses supervise
-intermediate filter representations, while template blurring changes the information available to the full tracker.
-Improved performance on corrupted-template frames would suggest that the memory tokens provide useful target appearance
-information for final prediction.
-
-However, template blurring is still an indirect form of supervision. It does not explicitly require a memory token to
-encode a specific target representation. The model may still learn to rely on other cues, such as the search crop,
-instead
-of fully exploiting memory. Another limitation is that template blurring mainly encourages memory to store appearance
-information. It does not directly provide motion supervision. Therefore, it may not fully encourage memory tokens to
-learn
-temporal cues such as target displacement, velocity, or motion consistency across frames.
-
-Overall, template blurring creates a controlled training condition in which the original template pathway is weakened.
-Compared with explicit auxiliary losses, it is less direct but substantially simpler and does not change the main
-tracking
-objective.
+As a result, template blurring serves as a controlled training condition that weakens the dominant template
+matching, offering a simple and implicit alternative to explicit auxiliary losses.
 
 # 6. Experimental Setup
 
@@ -1062,20 +943,23 @@ The experiments are performed on the GOT-10k dataset. GOT-10k is a generic objec
 tracking benchmark with more than 10,000 video segments and more than 1.5 million
 labeled bounding boxes [20]. The test annotations are hidden, and evaluation is
 performed through the official benchmark server. The tracking training in this thesis
-uses GOT-10k only, without additional tracking datasets. The backbone is initialized
-from an MAE-pretrained ViT checkpoint, following the OSTrack configuration.
+uses GOT-10k only, without additional tracking datasets.
 
 ## 6.2 Model configuration
 
-For evaluation, the 256-pixel search-crop baseline with CE pruning was chosen as the closest comparison.
+As a baseline, the OSTrack model with a 256-pixel search crop and Candidate Elimination (CE) pruning was chosen.
+Following the original OSTrack configuration, the ViT backbone is initialized from an MAE-pretrained checkpoint.
 
-The model configuration can be summarized as follows: template crop size 128 x 128
-pixels, search crop size 256 x 256 pixels, 64 template tokens, 256 search tokens, 64
-memory tokens, ViT-style OSTrack backbone, memory tokens inside the transformer token
-sequence, two-stage GRU recurrent update, candidate elimination enabled with keep ratio
-0.7, causal consecutive sequence sampler, and dynamic search cropping based on previous
-predictions in the final pipeline. The recurrent training was initially performed with
-20-frame search rollouts; in the later stages, this was reduced to 15-frame rollouts.
+The proposed MemOSTrack configuration builds upon this baseline with the following specifications. The model processes
+a $128 \times 128$ pixel template crop (64 template tokens) and a $256 \times 256$ pixel search crop 
+(256 search tokens). To this visual sequence, 64 memory tokens are added, bringing the initial sequence length
+to 384 tokens. Memory tokens are updated inside the transformer backbone via the proposed two-stage GRU recurrent
+mechanism. 
+
+The training pipeline employs a causal consecutive sequence sampler under a two-stage curriculum. To stabilize early
+optimization, the first 40 epochs utilize ground-truth-centered crops with random jitter over 20-frame rollouts.
+After, inference-like dynamic cropping is fully enabled, and the rollout length is reduced to 15 frames.
+
 
 ## 6.3 Hyperparameter and optimizer considerations
 
@@ -1102,28 +986,17 @@ recurrent parameters are trained together with a pretrained transformer backbone
 
 ## 6.4 Evaluation protocol
 
-The tracker is evaluated on GOT-10k using AO, SR0.50, and SR0.75, as defined in
-Section 1.4.
+The tracker is evaluated on the GOT-10k test set using Average Overlap (AO), Success Rate at 0.50 (SR0.50), and Success
+Rate at 0.75 (SR0.75), as defined in Section 1.4.
 
 The comparison is made against reported OSTrack-256 + CE and OSTrack-384 + CE
 baselines. The 256 baseline is the closest architectural comparison because it uses the
 same search resolution. The 384 baseline is included as a stronger high-resolution
-reference. Because the proposed model introduces several changes simultaneously, the
+reference. Because MemOSTrack the proposed model introduces several changes simultaneously, the
 final result should not be interpreted as identifying a single cause. A complete study
 would include ablations, such as memory tokens without dynamic cropping, dynamic
 cropping without memory, one GRU instead of two GRUs, and different memory loss
-weights. Those studies are listed as future work.
-
-## 6.5 Reproducibility considerations
-
-The reported MemOSTrack result depends on the exact configuration file, checkpoint,
-GOT-10k split, and sequence-sampling setup used during evaluation. These details are
-especially important for memory-based trackers because small changes in rollout length
-or crop generation can produce different training behavior.
-
-The comparison also separates external baseline numbers from the author's own results.
-The OSTrack baseline numbers are reported values from the literature \[13\]. The
-MemOSTrack numbers are experimental results from this work.
+weights are is left for future work .
 
 # 7. Results and Discussion
 
