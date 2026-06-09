@@ -1,5 +1,6 @@
 \PassOptionsToPackage{protrusion=true,expansion=false}{microtype}
 \documentclass[masterthesis]{fer}
+\usepackage{amsmath}
 \usepackage{booktabs}
 \usepackage{longtable}
 \usepackage{array}
@@ -360,85 +361,288 @@ bounded as the sequence length increases.
 
 \chapter{OSTrack Baseline}\label{ostrack-baseline}
 
-\section{One-stream transformer tracking}\label{one-stream-transformer-tracking}
+\section{OSTrack Tracker}\label{ostrack-tracker}
 
-OSTrack is a one-stream, one-stage transformer tracker. The term one-stream means that
-template and search tokens are processed together in a single backbone instead of being
-encoded separately and then matched by a separate relation module. The term one-stage
-means that feature extraction and relation modeling are unified inside the transformer
-backbone. The OSTrack paper argues that this joint processing creates bidirectional
-information flow between template and search tokens and allows target-oriented features
-to be learned through their interaction {[}13{]}.
+OSTrack is a real-time single-object visual tracker introduced by Ye et al. in \emph{Joint Feature Learning and Relation
+Modeling for Tracking: A One-Stream Framework}, accepted at ECCV 2022 {[}13{]}. It is used in this thesis as the baseline
+tracker because it provides a strong transformer-based architecture while keeping the tracking pipeline relatively
+simple.
 
-In a simplified notation, let \(T_{t,l}\) denote template tokens and \(S_{t,l}\) denote
-search tokens at layer \(l\) for frame \(t\). In the baseline without memory tokens, a
-transformer layer processes their concatenation:
+During inference, OSTrack processes one search frame at a time. It receives a fixed template crop from the first
+annotated frame and a search crop from the current frame. The tracker localizes the target inside the search crop, and
+the predicted bounding box is then used to define the search region for the next frame.
 
-\[
-[T_{t,l}, S_{t,l}] =
-\operatorname{ViTLayer}_l([T_{t,l-1}, S_{t,l-1}]).
-\]
+The main architectural idea of OSTrack is its one-stream design. Instead of extracting template and search features
+separately and then applying a separate relation module, OSTrack converts both crops into tokens and processes them
+jointly in a single Vision Transformer (ViT) backbone. As a result, feature extraction and template-search relation
+modeling
+are performed inside the same backbone. Self-attention over the combined token sequence allows template and search
+tokens to interact throughout the network, which helps the model learn target-oriented search features {[}13{]}.
 
-The search tokens after the final backbone layer are passed to a prediction head. In the
-original OSTrack design, the search tokens are reshaped into a spatial feature map and
-processed by a lightweight fully convolutional head that predicts a classification score
-map, local offsets, and normalized box size. These outputs are then used to obtain the
-target bounding box. The exact head implementation is not the main focus of this thesis.
-What matters for this work is that the baseline has no explicit recurrent state that is
-propagated across frames inside the backbone.
+After the ViT backbone, OSTrack uses a lightweight fully convolutional prediction head. The final search tokens are
+reshaped into a two-dimensional spatial feature map and passed to this head. The head has three fully convolutional
+output branches, which predict a classification score map, a local offset map, and a normalized bounding-box size map.
+The position with the highest classification score is selected as the target position.
+The backbone is initialized from a pretrained ViT model.
 
-The one-stream structure is effective because template-search interaction is not
-delayed until after independent feature extraction. Each transformer layer can propagate
-information between the template and search tokens. This also creates a challenge for
-memory research: because the baseline already has a strong template-search pathway, a
-new memory pathway may be ignored unless the training setup makes temporal information
-useful.
+OSTrack also supports candidate elimination, which progressively removes less relevant search
+tokens to reduce computation; this mechanism is described separately in Section 2.3. For this thesis, the most important
+property is that OSTrack has strong template-search interaction, but no explicit recurrent memory state across frames.
 
-\section{ViT backbone}\label{vit-backbone}
+\section{ViT Backbone}\label{vit-backbone}
 
-OSTrack is built on a Vision Transformer backbone. In this thesis, the standard
-ViT-based OSTrack backbone is augmented rather than replaced. A Vision Transformer
-divides an image into fixed-size patches, embeds each patch as a token, adds positional
-information, and processes the resulting sequence with transformer encoder layers {[}22{]}.
+OSTrack is built on a pretrained Vision Transformer (ViT) backbone. Most of the modifications inthis thesis are focused around the ViT backbone.
+ViT is a powerful image-processing architecture that has shown strong performance in
+computer vision and, with large-scale pretraining, can match or outperform state-of-the-art
+convolutional networks on several image-recognition benchmarks. ViT represents an image as a sequence of patch tokens and processes this sequence
+using transformer encoder layers {[}22{]}. In OSTrack, this structure is adapted to tracking by applying patch embedding to
+both the template crop and the search crop, and then processing the resulting tokens jointly in the same backbone {[}13{]}.
+
+During the ViT processing of an image crop \(X\), the image is first divided into non-overlapping patches:
+
+\begin{equation}
+\begin{aligned}
+N &= \frac{HW}{P^2},
+\qquad
+X_p = [x_1, x_2, \ldots, x_N]^\top
+\in \mathbb{R}^{N \times P^2C}.
+\end{aligned}
+\tag{2.1}
+\end{equation}
+
+where:
+
+\begin{itemize}
+\item \(X \in \mathbb{R}^{H \times W \times C}\) is the input image crop;
+\item \(H\) and \(W\) are the height and width of the crop;
+\item \(C\) is the number of image channels;
+\item \(P\) is the patch size, assuming that \(H\) and \(W\) are divisible by \(P\);
+\item \(N\) is the number of patches;
+\item \(x_i \in \mathbb{R}^{P^2C}\) is the flattened vector of the \(i\)-th patch;
+\item \(X_p\) is the matrix containing all flattened patch vectors.
+\end{itemize}
+
+The flattened patches are projected into a \(D\)-dimensional embedding space, and positional embeddings are added:
+
+\begin{equation}
+\begin{aligned}
+E_X &= X_p W_E + b_E,
+\qquad
+Z_0 = E_X + P_{\mathrm{pos}}.
+\end{aligned}
+\tag{2.2}
+\end{equation}
+
+where:
+
+\begin{itemize}
+\item \(E_X \in \mathbb{R}^{N \times D}\) is the patch-embedding sequence;
+\item \(W_E \in \mathbb{R}^{P^2C \times D}\) is the learnable patch-projection matrix;
+\item \(b_E \in \mathbb{R}^{D}\) is the learnable projection bias, broadcast across all patches;
+\item \(D\) is the token embedding dimension;
+\item \(P_{\mathrm{pos}} \in \mathbb{R}^{N \times D}\) is the positional embedding;
+\item \(Z_0 \in \mathbb{R}^{N \times D}\) is the initial token sequence passed to the transformer encoder.
+\end{itemize}
+
+A standard pre-normalization ViT encoder layer first applies Layer Normalization and Multi-Head Self-Attention, followed
+by a residual connection:
+
+\begin{equation}
+\begin{aligned}
+A_l &=
+\operatorname{LN}(Z_{l-1}),
+\qquad
+U_l =
+Z_{l-1}
++
+\operatorname{MSA}(A_l).
+\end{aligned}
+\tag{2.3}
+\end{equation}
+
+where:
+
+\begin{itemize}
+\item \(l\) is the transformer layer index;
+\item \(Z_{l-1}\) is the input token sequence to layer \(l\);
+\item \(\operatorname{LN}(\cdot)\) denotes Layer Normalization;
+\item \(A_l\) is the normalized token sequence;
+\item \(\operatorname{MSA}(\cdot)\) denotes Multi-Head Self-Attention;
+\item \(U_l\) is the token sequence after self-attention and residual addition.
+\end{itemize}
+
+In the CE-enabled OSTrack backbone, candidate elimination is inserted after this attention-and-residual step:
+
+\begin{equation}
+\bar{U}_l =
+\begin{cases}
+\operatorname{CE}_l(U_l), & \text{if CE pruning is enabled at layer } l, \\
+U_l, & \text{otherwise}.
+\end{cases}
+\tag{2.4}
+\end{equation}
+
+where:
+
+\begin{itemize}
+\item \(\operatorname{CE}_l(\cdot)\) denotes the candidate elimination operation at layer \(l\);
+\item \(\bar{U}_l\) is the token sequence after optional CE pruning;
+\item if CE is not enabled at layer \(l\), the sequence is left unchanged.
+\end{itemize}
+
+Candidate elimination is specific to OSTrack and is only present in CE-enabled configurations. It is not part of the
+original ViT encoder block. The detailed CE scoring and pruning procedure is described separately in Section 2.3.
+
+After the optional CE step, the feed-forward MLP sublayer is applied with another residual connection:
+
+\begin{equation}
+\begin{aligned}
+Z_l &=
+\bar{U}_l
++
+\operatorname{MLP}
+\left(
+\operatorname{LN}(\bar{U}_l)
+\right).
+\end{aligned}
+\tag{2.5}
+\end{equation}
+
+where:
+
+\begin{itemize}
+\item \(\bar{U}_l\) is the input to the MLP part of the encoder layer;
+\item \(\operatorname{MLP}(\cdot)\) is the feed-forward network;
+\item \(Z_l\) is the output token sequence of layer \(l\).
+\end{itemize}
+
+The Multi-Head Self-Attention operation lets each token aggregate information from other tokens in the same sequence.
+For one attention head \(h\), it is written as:
+
+\begin{equation}
+\begin{aligned}
+Q_h &= A W_Q^h,
+\qquad
+K_h = A W_K^h,
+\qquad
+V_h = A W_V^h, \\
+\operatorname{head}_h(A)
+&=
+\operatorname{softmax}
+\left(
+\frac{Q_h K_h^\top}{\sqrt{d_h}}
+\right)
+V_h, \\
+\operatorname{MSA}(A)
+&=
+\operatorname{Concat}
+\left(
+\operatorname{head}_1(A),
+\ldots,
+\operatorname{head}_{n_h}(A)
+\right)
+W_O.
+\end{aligned}
+\tag{2.6}
+\end{equation}
+
+where:
+
+\begin{itemize}
+\item \(A\) is the normalized input sequence to the attention operation;
+\item \(Q_h\), \(K_h\), and \(V_h\) are the query, key, and value matrices for head \(h\);
+\item \(W_Q^h\), \(W_K^h\), and \(W_V^h\) are learnable projection matrices for head \(h\);
+\item \(d_h\) is the feature dimension of one attention head;
+\item \(n_h\) is the number of attention heads;
+\item \(W_O\) is the output projection matrix after concatenating all heads.
+\end{itemize}
+
+The MLP is applied independently to each token:
+
+\begin{equation}
+\begin{aligned}
+\operatorname{MLP}(z)
+&=
+W_2
+\operatorname{GELU}
+\left(
+W_1 z + b_1
+\right)
++
+b_2.
+\end{aligned}
+\tag{2.7}
+\end{equation}
+
+where:
+
+\begin{itemize}
+\item \(z \in \mathbb{R}^{D}\) is one token vector;
+\item \(W_1\), \(W_2\), \(b_1\), and \(b_2\) are learnable MLP parameters;
+\item \(\operatorname{GELU}(\cdot)\) is the activation function used inside the feed-forward block.
+\end{itemize}
+
+OSTrack applies this ViT backbone to a pair of tracking crops. Let \(T\) denote the template crop and \(S_t\) denote the
+search crop at frame \(t\). Their token sequences are
+
+\begin{equation}
+\begin{aligned}
+T_0 &=
+\operatorname{PatchEmbed}(T) + P_T,
+\qquad
+S_{t,0} =
+\operatorname{PatchEmbed}(S_t) + P_S, \\
+Z_{t,0}^{\mathrm{track}}
+&=
+[T_0, S_{t,0}].
+\end{aligned}
+\tag{2.8}
+\end{equation}
+
+where:
+
+\begin{itemize}
+\item \(T\) is the template crop from the first annotated frame;
+\item \(S_t\) is the search crop from frame \(t\);
+\item \(\operatorname{PatchEmbed}(\cdot)\) denotes patch flattening followed by linear projection;
+\item \(P_T\) and \(P_S\) are positional embeddings for the template and search tokens;
+\item \(T_0 \in \mathbb{R}^{N_T \times D}\) is the initial template-token sequence;
+\item \(S_{t,0} \in \mathbb{R}^{N_S \times D}\) is the initial search-token sequence;
+\item \([\cdot,\cdot]\) denotes concatenation along the token dimension;
+\item \(Z_{t,0}^{\mathrm{track}}\) is the combined OSTrack input sequence for frame \(t\).
+\end{itemize}
+
+After \(L\) transformer layers, the backbone output is
+
+\begin{equation}
+\begin{aligned}
+Z_{t,L}^{\mathrm{track}}
+&=
+\operatorname{ViTBackbone}
+\left(
+Z_{t,0}^{\mathrm{track}}
+\right)
+=
+[T_L^{(t)}, S_{t,L}].
+\end{aligned}
+\tag{2.9}
+\end{equation}
+
+where:
+
+\begin{itemize}
+\item \(L\) is the number of transformer layers;
+\item \(Z_{t,L}^{\mathrm{track}}\) is the final backbone output for frame \(t\);
+\item \(T_L^{(t)}\) denotes the processed template-token representation while tracking frame \(t\);
+\item \(S_{t,L}\) denotes the processed search-token representation for frame \(t\).
+\end{itemize}
+
+The final search-token part \(S_{t,L}\) is reshaped into a spatial feature map and passed to the prediction head.
 
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=0.9\textwidth]{vit_example.png}
-\begin{center}
-{\small\emph{Figure 2.X - Vision Transformer architecture. Vision Transformer.svg by Zhang, Lipton, Li, and Smola, licensed under CC BY-SA 4.0, via Wikimedia Commons [26].}}
-\end{center}
 \end{figure}
-
-OSTrack adapts this ViT structure to visual object tracking. The template crop and the
-search crop are both converted into patch tokens and then processed together by the same
-transformer backbone. Therefore, the backbone does not only extract visual features; it
-also models the relationship between the target template and the current search region.
-In this way, OSTrack unifies feature extraction and template-search interaction inside
-one transformer stream {[}13{]}.
-
-The evaluated MemOSTrack configuration follows the OSTrack-256 + CE backbone setting.
-It uses a ViT backbone with a \(128 \times 128\) pixel template crop and a
-\(256 \times 256\) pixel search crop. With the ViT-B/16 patch size, these crops
-correspond to 64 template tokens and 256 search tokens. The 256-pixel search resolution,
-ViT-B/16 backbone family, and CE-enabled token-pruning mechanism make this configuration
-the closest direct comparison to OSTrack-256 + CE from an architectural point of view.
-
-It is also important that OSTrack uses a pretrained ViT backbone. The original OSTrack
-paper shows that backbone initialization has a significant effect on tracking
-performance, with pretrained ViT models performing much better than training the
-backbone from scratch {[}13{]}. This is expected because tracking datasets are usually not
-large enough to learn strong general-purpose visual features without pretraining. In
-this thesis, the model uses the MAE-pretrained ViT-Base checkpoint, following the
-OSTrack configuration. MAE pretraining teaches the backbone useful visual
-representations by masking image patches and training the model to reconstruct the
-missing content {[}24{]}. This makes the backbone a strong starting point for tracking,
-while the proposed memory extension can be studied as an augmentation of the existing
-OSTrack architecture rather than as a completely new feature extractor.
-
-The main same-resolution baseline in this thesis is OSTrack-256 + CE. This baseline is
-the closest comparison because it uses the same search resolution, the same ViT-B/16
-backbone family, and the same CE-enabled pruning mechanism. This makes the configuration
-architecturally aligned with OSTrack-256 + CE.
 
 \section{Candidate elimination}\label{candidate-elimination}
 
