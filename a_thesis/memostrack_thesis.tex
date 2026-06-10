@@ -1,5 +1,5 @@
 \PassOptionsToPackage{protrusion=true,expansion=false}{microtype}
-\documentclass[masterthesis]{fer}
+\documentclass[bachelorthesis]{fer}
 \usepackage{amsmath}
 \usepackage{booktabs}
 \usepackage{longtable}
@@ -58,7 +58,7 @@
 
 
 \title{Extending OSTrack with GRU-Based Memory Tokens for Visual Object Tracking}
-\author{Student's name and surname}
+\author{Illia Rotan}
 \date{June 2026}
 \naslov{Extending OSTrack with GRU-Based Memory Tokens for Visual Object Tracking}
 \autor{Student's name and surname}
@@ -445,7 +445,7 @@ both the template crop and the search crop, and then processing the resulting to
 \centering
 \includegraphics[width=0.65\textwidth]{vit_example.png}
 \begin{center}
-{\small\emph{Figure 2.X - Vision Transformer architecture. Vision Transformer.svg by Zhang, Lipton, Li, and Smola, licensed under CC BY-SA 4.0, via Wikimedia Commons [26].}}
+{\small\emph{Figure 2.1 - Vision Transformer architecture. Vision Transformer.svg by Zhang, Lipton, Li, and Smola, licensed under CC BY-SA 4.0, via Wikimedia Commons [26].}}
 \end{center}
 \end{figure}
 
@@ -636,11 +636,9 @@ remains an OSTrack-style tracker with an added recurrent memory stream.
 The first architectural variant adds memory tokens to the OSTrack backbone and lets the
 ViT layers update them directly. In this version, memory tokens are concatenated with
 the template and search tokens and are processed by the same transformer layers as the
-visual tokens. The goal is to test whether the existing transformer operations,
-including self-attention, residual connections, and feed-forward layers, are sufficient
-to learn a useful memory update strategy.
+visual tokens. The goal is to allow memory to interact with search and template tokens through the existing attention operations.
 
-In the direct transformer-based update, each ViT layer produces transformed search,
+The ViT backbone is modified tp process transformed search,
 template, and memory tokens in a single forward pass:
 
 \begin{equation}
@@ -663,16 +661,15 @@ template, and memory tokens in a single forward pass:
 All token groups have the same embedding dimension \(D\), so they can be concatenated
 along the token dimension and processed by the same transformer block.
 
-For the first frame of a sequence, no previous memory state exists. The model therefore
-uses a learned initial memory state. Then, after each frame has been processed, the backbone
-returns an updated memory state in the auxiliary output.
-This updated memory state is then provided to the backbone when processing the next
-search frame, together with the template and the next search crop.
+For the first frame of a sequence, no previous memory state exists, so the model uses a learned initial memory state.
+After each consecutive frame is processed, the backbone returns an updated memory state in the auxiliary output,
+which is then fed back into the backbone together with the template and the next search crop when processing the next frame.
+
 
 To distinguish memory tokens from visual tokens, the model adds a learned memory-token
 type embedding to the memory tokens before they are processed by the backbone. This
 embedding shifts the memory tokens in feature space and gives the transformer a learned
-signal that these prefix tokens represent memory states rather than image patches.
+signal that allows model to understand that these tokens represent memory states rather than image patches.
 
 In the CE-enabled backbone, memory tokens are intentionally excluded from
 candidate-elimination decisions. First, they are not pruned, because CE removes only
@@ -692,15 +689,15 @@ participation in transformer attention.
 
 \section{Limitations of direct memory update}\label{limitations-of-direct-memory-update}
 
-The direct-update variant exposes two fundamental limitations regarding long-term
-temporal modeling. While the standard Vision Transformer architecture is effective for
+When using for long-termtemporal modeling direct-update variant exposes two fundamental limitations.
+While the standard Vision Transformer architecture is effective for
 spatial feature extraction and template-search matching, relying on it alone for
-recurrent memory updates is insufficient.
+recurrent memory updates might is insufficient.
 
 The first limitation is the lack of explicit gating for memory preservation. In the direct-update variant,
 memory tokens are updated by directly by the same transformer block. The attention mechanism is effective
 for deciding which template and search tokens should influence the memory representation, however, it does not provide
-a dedicated gate that controles how much of the previous memory should be kept and how much new information should be written.
+a dedicated gate that controls how much of the previous memory should be kept and how much new information should be written.
 
 Equation~\ref{eq:vit-attention-residual} provides a residual path that can preserve information from the
 previous layer:
@@ -894,11 +891,10 @@ and the model is trained to predict the target box inside the search crop:
 \item \(\hat{B}_t\) is the predicted target box at time \(t\);
 \item \(f(\cdot)\) is the tracker model.
 }
-This setup is
-sufficient for a memory-free tracker because each training sample can be processed
-independently. No recurrent state has to be carried from previous search frames.
+Since the standard memory-free tracker model processes each training sample
+independently this setup is sufficient for it's training.
 
-For MemOSTrack, independent pair-based training is insufficient. If the model has a
+However, the for the correct MemOSTrack training, the independent pair-based training is insufficient. If the model has a
 memory state \(M_t\), then this state should be produced from earlier frames in the same
 video. Resetting memory for every pair prevents the model from learning how memory
 evolves across time, while carrying memory across unrelated samples would be incorrect.
@@ -937,7 +933,7 @@ that the order is preserved: frame \(t\) is processed after frame \(t-1\), not a
 independent shuffled sample. This gives the recurrent memory module a meaningful temporal
 path during training.
 
-\section{Dynamic search cropping}\label{dynamic-search-cropping}
+\section{Dynamic inference-like search cropping}\label{dynamic-search-cropping}
 
 Sequence-based sampling makes recurrent memory training possible, but it does not by
 itself remove the mismatch between training and inference. If every search crop is
@@ -978,7 +974,7 @@ errors to influence later inputs. This difference is especially important for re
 memory because an incorrect crop can also affect the memory state passed to later
 frames.
 
-The final training pipeline therefore introduced dynamic search cropping. The tracker
+The final training pipeline therefore introduced inference-like search cropping. The tracker
 state is initialized from the first-frame ground-truth box, but later crops are generated
 from the model's own previous predictions. At each step, the model receives the template,
 the current search crop, and the current memory state; it predicts a target box, updates
