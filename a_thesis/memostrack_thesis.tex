@@ -224,10 +224,7 @@ target bounding box. OSTrack [13] further simplified the tracking pipeline by
 introducing a one-stream transformer framework. Instead of extracting template and
 search features independently and then applying a separate relation module, OSTrack
 jointly processes template and search tokens inside the same backbone, so that feature
-extraction and relation modeling are unified. Recent high-performing trackers on GOT-10k
-include temporal and autoregressive models such as ODTrack [15], ARTrackV2 [16], and
-ARPTrack [17]. These models indicate that recent tracking research increasingly
-explores stronger temporal modeling, token propagation, and sequence-level pretraining.
+extraction and relation modeling are unified.
 
 All of these models share a similar high-level tracking structure. They accept a
 template crop, which represents how the target looks, and a search crop, which contains
@@ -247,13 +244,13 @@ features from scratch. In practice, the pretrained backbone provides general vis
 representations, while tracker training teaches the model how to use these
 representations for target localization and target-background discrimination.
 
-Another important family of trackers is represented by DiMP [18]. Unlike purely
+Another important family of trackers is represented by DiMP [15]. Unlike purely
 Siamese approaches that mainly compare a fixed template with the current search region,
 DiMP learns a discriminative target model during tracking. Its main idea is to predict a
 target-specific classifier that can distinguish the target from the background using
 information available from the video sequence. This makes DiMP especially relevant to
 this thesis because it explicitly uses sequence information to adapt the target model
-online, instead of relying only on a static initial template. The later PrDiMP [19]
+online, instead of relying only on a static initial template. The later PrDiMP [16]
 extends this direction with a probabilistic regression formulation for visual tracking.
 Although DiMP-style trackers are architecturally different from OSTrack, they show that
 online adaptation and sequence-level information can improve tracking robustness. This
@@ -275,7 +272,7 @@ This location is usually estimated from the bounding-box prediction in the previ
 There are two main reasons why a search crop is used instead of the whole image. First,
 it reduces computation by allowing the model to process only the region where the target
 is expected to appear. This is especially important for transformer-based trackers,
-because transformer-style attention is quadratic in the number of tokens {[}21{]}. For
+because transformer-style attention is quadratic in the number of tokens {[}18{]}. For
 example, with \(16 \times 16\) patches, a \(256 \times 256\) search crop contains 256
 tokens, whereas a full HD frame would contain more than 8000 tokens. The corresponding
 attention matrix is therefore much smaller for the search crop than for the full image.
@@ -312,7 +309,7 @@ measures.
 
 In this thesis, the main benchmark is GOT-10k. GOT-10k is a generic object tracking
 benchmark designed to evaluate how well a tracker generalizes to unseen object classes
-{[}20{]}. It follows a one-shot tracking protocol: the target is specified by a bounding box
+{[}17{]}. It follows a one-shot tracking protocol: the target is specified by a bounding box
 in the first frame, and the tracker must localize the same object in the remaining
 frames. The test annotations are hidden, so final results are obtained through the
 official evaluation server.
@@ -336,7 +333,7 @@ overlap, while a value of 0 means that the boxes do not overlap.
 \item \(|\cdot|\) denotes the area of a box region.
 }
 
-GOT-10k reports Average Overlap (AO), SR0.50, and SR0.75 {[}20{]}. AO is computed
+GOT-10k reports Average Overlap (AO), SR0.50, and SR0.75 {[}17{]}. AO is computed
 as the average IoU over all evaluated frames:
 
 \begin{equation}
@@ -433,13 +430,13 @@ OSTrack is built on a pretrained Vision Transformer (ViT) backbone. Most of the 
 ViT is a powerful image-processing architecture that has shown strong performance in
 computer vision and, with large-scale pretraining, can match or outperform state-of-the-art
 convolutional networks on several image-recognition benchmarks. ViT represents an image as a sequence of patch tokens and processes this sequence
-using transformer encoder layers {[}22{]}. In OSTrack, this structure is adapted to tracking by applying patch embedding to
+using transformer encoder layers {[}19{]}. In OSTrack, this structure is adapted to tracking by applying patch embedding to
 both the template crop and the search crop, and then processing the resulting tokens jointly in the same backbone {[}13{]}.
 
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=0.65\textwidth]{vit_example.png}
-\caption{Vision Transformer architecture. Vision Transformer.svg by Zhang, Lipton, Li, and Smola, licensed under CC BY-SA 4.0, via Wikimedia Commons [25].}
+\caption{Vision Transformer architecture. Vision Transformer.svg by Zhang, Lipton, Li, and Smola, licensed under CC BY-SA 4.0, via Wikimedia Commons [22].}
 \label{fig:vit}
 \end{figure}
 
@@ -747,7 +744,7 @@ following section.
 \section{Two-way GRU. GRU-based memory update.}\label{variant-b-gru-based-memory-update-and-two-stage-architecture}
 
 To implement this controlled update, the second architectural variant introduces a Gated Recurrent Unit (GRU) mechanism
-to the memory stream. A GRU is a recurrent module that updates a hidden state using learned gates {[}23{]}. These gates
+to the memory stream. A GRU is a recurrent module that updates a hidden state using learned gates {[}20{]}. These gates
 control how much of the previous state is preserved and how much new information is accepted. This is highly suitable
 for memory tokens because the tracker must retain reliable target information while still adapting when the target
 appearance changes.
@@ -988,7 +985,7 @@ The introduction of memory tokens transforms the tracker into a recurrent model,
 error backpropagation across temporal iterations. Allowing gradients to flow through an entire video sequence is both
 computationally expensive and highly demanding on GPU memory. Additionally, unrolling the computational graph over long
 sequences amplifies the risk of gradient instability, such as vanishing or exploding gradients. A standard approach to
-address this is Truncated Backpropagation Through Time {[}26{]}. In the provided implementation, the model periodically
+address this is Truncated Backpropagation Through Time {[}23{]}. In the provided implementation, the model periodically
 detaches the memory state from the computation graph after a fixed number of frames (specifically, 8 frames during
 training). This truncation limits how far the gradients can propagate backward in time, balancing the need to learn
 temporal dependencies with computational feasibility and training stability.
@@ -1083,9 +1080,9 @@ The second auxiliary loss is the DiMP-style target-match loss. Instead of direct
 filter on sampled features from previous frames, this loss first constructs a stronger sequence-level target filter and
 then trains each predicted memory filter to match it.
 
-This idea is inspired by DiMP {[}18{]}, where tracking is formulated as learning a target-specific discriminative model from
+This idea is inspired by DiMP {[}15{]}, where tracking is formulated as learning a target-specific discriminative model from
 training samples. DiMP showed that online target model prediction can use both target and background information,
-instead of only matching a target template {[}18{]}.
+instead of only matching a target template {[}15{]}.
 
 The proposed DiMP-style target-match loss is not a reimplementation of the full DiMP tracker. Instead, it borrows the
 idea of fitting a discriminative target filter from a sequence of search features. The fitted filter is used as a
@@ -1191,14 +1188,14 @@ matching, offering a simple and implicit alternative to explicit auxiliary losse
 
 The experiments are performed on the GOT-10k dataset. GOT-10k is a generic object
 tracking benchmark with more than 10,000 video segments and more than 1.5 million
-labeled bounding boxes {[}20{]}. The test annotations are hidden, and evaluation is
+labeled bounding boxes {[}17{]}. The test annotations are hidden, and evaluation is
 performed through the official benchmark server. The tracking training in this thesis
 uses GOT-10k only, without additional tracking datasets.
 
 \section{Model configuration}\label{model-configuration}
 
 As a baseline, the OSTrack model with a 256-pixel search crop and Candidate Elimination (CE) pruning was chosen.
-Following the original OSTrack configuration, the ViT backbone is initialized from an MAE-pretrained checkpoint {[}24{]}.
+Following the original OSTrack configuration, the ViT backbone is initialized from an MAE-pretrained checkpoint {[}21{]}.
 
 The proposed MemOSTrack configuration builds upon this baseline with the following specifications. The model processes
 a \(128 \times 128\) pixel template crop (64 template tokens) and a \(256 \times 256\) pixel search crop
@@ -1231,7 +1228,7 @@ accumulates losses over multiple frames and backpropagates through a memory chai
 Dynamic cropping can also create hard examples when early predictions move the crop away
 from the target. These factors can lead to occasional large gradients. Gradient clipping
 is therefore a practical stabilization technique, especially when newly initialized
-recurrent parameters are trained together with a pretrained transformer backbone {[}27{]}.
+recurrent parameters are trained together with a pretrained transformer backbone {[}24{]}.
 
 \section{Evaluation protocol}\label{evaluation-protocol}
 
@@ -1518,46 +1515,37 @@ Relation Modeling for Tracking: A One-Stream Framework,' ECCV, 2022.
 [14] V. Borsuk, R. Vei, O. Kupyn, T. Martyniuk, I. Krashenyi, and J. Matas, `FEAR:
 Fast, Efficient, Accurate and Robust Visual Tracker,' ECCV, 2022.
 
-[15] Y. Zheng, B. Zhong, Q. Liang, Z. Mo, S. Zhang, and X. Li, `ODTrack: Online Dense
-Temporal Token Learning for Visual Tracking,' AAAI, 2024.
-
-[16] Y. Bai, Z. Zhao, Y. Gong, and X. Wei, `ARTrackV2: Prompting Autoregressive
-Tracker Where to Look and How to Describe,' CVPR, 2024.
-
-[17] S. Liang, Y. Bai, Y. Gong, and X. Wei, `Autoregressive Sequential Pretraining for
-Visual Tracking,' CVPR, 2025.
-
-[18] G. Bhat, M. Danelljan, L. Van Gool, and R. Timofte, `Learning Discriminative
+[15] G. Bhat, M. Danelljan, L. Van Gool, and R. Timofte, `Learning Discriminative
 Model Prediction for Tracking,' ICCV, 2019.
 
-[19] M. Danelljan, L. Van Gool, and R. Timofte, `Probabilistic Regression for Visual
+[16] M. Danelljan, L. Van Gool, and R. Timofte, `Probabilistic Regression for Visual
 Tracking,' CVPR, 2020.
 
-[20] L. Huang, X. Zhao, and K. Huang, `GOT-10k: A Large High-Diversity Benchmark for
+[17] L. Huang, X. Zhao, and K. Huang, `GOT-10k: A Large High-Diversity Benchmark for
 Generic Object Tracking in the Wild,' IEEE Transactions on Pattern Analysis and Machine
 Intelligence, 2021.
 
-[21] A. Vaswani et al., `Attention Is All You Need,' NeurIPS, 2017.
+[18] A. Vaswani et al., `Attention Is All You Need,' NeurIPS, 2017.
 
-[22] A. Dosovitskiy et al., `An Image is Worth 16x16 Words: Transformers for Image
+[19] A. Dosovitskiy et al., `An Image is Worth 16x16 Words: Transformers for Image
 Recognition at Scale,' ICLR, 2021.
 
-[23] K. Cho et al., `Learning Phrase Representations using RNN Encoder-Decoder for
+[20] K. Cho et al., `Learning Phrase Representations using RNN Encoder-Decoder for
 Statistical Machine Translation,' EMNLP, 2014.
 
-[24] K. He, X. Chen, S. Xie, Y. Li, P. Dollar, and R. Girshick, `Masked Autoencoders
+[21] K. He, X. Chen, S. Xie, Y. Li, P. Dollar, and R. Girshick, `Masked Autoencoders
 Are Scalable Vision Learners,' CVPR, 2022.
 
-[25] A. Zhang, Z. C. Lipton, M. Li, and A. J. Smola, `Vision Transformer.svg,'
+[22] A. Zhang, Z. C. Lipton, M. Li, and A. J. Smola, `Vision Transformer.svg,'
 Wikimedia Commons, 2024. Licensed under Creative Commons Attribution-ShareAlike 4.0
 International (CC BY-SA 4.0). Available:
 https://commons.wikimedia.org/wiki/File:Vision\_Transformer.svg
 
-[26] R. J. Williams and D. Zipser, `Gradient-Based Learning Algorithms for Recurrent
+[23] R. J. Williams and D. Zipser, `Gradient-Based Learning Algorithms for Recurrent
 Networks and Their Computational Complexity,' in Backpropagation: Theory, Architectures,
 and Applications, 1995.
 
-[27] R. Pascanu, T. Mikolov, and Y. Bengio, `On the Difficulty of Training Recurrent
+[24] R. Pascanu, T. Mikolov, and Y. Bengio, `On the Difficulty of Training Recurrent
 Neural Networks,' Proceedings of the 30th International Conference on Machine Learning
 (ICML), 2013.
 
