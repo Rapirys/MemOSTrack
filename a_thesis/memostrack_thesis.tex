@@ -441,6 +441,14 @@ convolutional networks on several image-recognition benchmarks. ViT represents a
 using transformer encoder layers {[}22{]}. In OSTrack, this structure is adapted to tracking by applying patch embedding to
 both the template crop and the search crop, and then processing the resulting tokens jointly in the same backbone {[}13{]}.
 
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.65\textwidth]{vit_example.png}
+\begin{center}
+{\small\emph{Figure 2.X - Vision Transformer architecture. Vision Transformer.svg by Zhang, Lipton, Li, and Smola, licensed under CC BY-SA 4.0, via Wikimedia Commons [26].}}
+\end{center}
+\end{figure}
+
 During the ViT processing of an image crop \(X\), the image is first divided into non-overlapping patches:
 
 \begin{equation}
@@ -462,90 +470,45 @@ X_p = [x_1, x_2, \ldots, x_N]^\top
 \item \(X_p\) is the sequence of all flattened patch vectors.
 }
 
-The flattened patches are then projected into the token embedding space, and positional embeddings are added:
-
-\begin{equation}
-\begin{aligned}
-E_0 &= X_p W_E + b_E,
-\qquad
-Z_0 = E_0 + P_{\mathrm{pos}}.
-\end{aligned}
-\tag{2.2}
-\end{equation}
-\FormulaNotation{
-\item \(E_0 \in \mathbb{R}^{N \times D}\) is the patch-embedding sequence;
-\item \(W_E \in \mathbb{R}^{P^2C \times D}\) is the learnable patch-projection matrix;
-\item \(b_E \in \mathbb{R}^{D}\) is the learnable projection bias;
-\item \(D\) is the token embedding dimension;
-\item \(P_{\mathrm{pos}} \in \mathbb{R}^{N \times D}\) is the positional embedding;
-\item \(Z_0 \in \mathbb{R}^{N \times D}\) is the input token sequence to the transformer.
-}
-
 A standard ViT encoder layer applies a pre-normalized multi-head self-attention block followed by a pre-normalized MLP
-block, with residual connections in both cases:
+block, with residual connections in both cases. In the CE-enabled OSTrack backbone, candidate elimination is inserted
+between the attention block and the MLP block. This gives the following \(\operatorname{ViTBackbone}\) layer update:
 
-\begin{equation}
-\begin{aligned}
+\begin{align}
 U_l &=
 Z_{l-1}
 +
 \operatorname{MSA}\left(\operatorname{LN}(Z_{l-1})\right),
-\end{aligned}
 \tag{2.3}
-\end{equation}
-
-\begin{equation}
-Z_l =
-U_l
-+
-\operatorname{MLP}\left(\operatorname{LN}(U_l)\right).
+\\[0.5em]
+\tilde{U}_l &=
+\begin{cases}
+\operatorname{CE}_l(U_l), & \text{if CE pruning is enabled at layer } l, \\
+U_l, & \text{otherwise},
+\end{cases}
 \tag{2.4}
-\end{equation}
+\\[0.5em]
+Z_l &=
+\tilde{U}_l
++
+\operatorname{MLP}\left(\operatorname{LN}(\tilde{U}_l)\right).
+\tag{2.5}
+\end{align}
 \FormulaNotation{
 \item \(l\) is the transformer layer index;
 \item \(Z_{l-1}\) is the input token sequence to layer \(l\);
-\item \(U_l\) is the intermediate sequence after the attention block;
+\item \(U_l\) is the intermediate sequence after the attention block and residual connection;
+\item \(\tilde{U}_l\) is the token sequence after optional CE pruning;
 \item \(Z_l\) is the output token sequence of layer \(l\);
 \item \(\operatorname{LN}(\cdot)\) denotes Layer Normalization;
 \item \(\operatorname{MSA}(\cdot)\) denotes Multi-Head Self-Attention;
+\item \(\operatorname{CE}_l(\cdot)\) denotes candidate elimination at layer \(l\);
 \item \(\operatorname{MLP}(\cdot)\) denotes the feed-forward block.
 }
 
 Multi-head self-attention allows each token to aggregate information from other tokens in the same sequence. In OSTrack,
 this is important because template and search tokens are processed together, so self-attention provides the mechanism
 through which template-search interaction occurs inside the backbone.
-
-In CE-enabled OSTrack, an additional candidate elimination (CE) step is inserted after the attention-and-residual
-operation:
-
-\begin{equation}
-\bar{U}_l =
-\begin{cases}
-\operatorname{CE}_l(U_l), & \text{if CE pruning is enabled at layer } l, \\
-U_l, & \text{otherwise},
-\end{cases}
-\tag{2.5}
-\end{equation}
-\FormulaNotation{
-\item \(\operatorname{CE}_l(\cdot)\) denotes candidate elimination at layer \(l\);
-\item \(\bar{U}_l\) is the token sequence after optional CE pruning.
-}
-
-and the MLP block is then applied to \(\bar{U}_l\) instead of \(U_l\):
-
-\begin{equation}
-\begin{aligned}
-Z_l &=
-\bar{U}_l
-+
-\operatorname{MLP}\left(\operatorname{LN}(\bar{U}_l)\right).
-\end{aligned}
-\tag{2.6}
-\end{equation}
-\FormulaNotation{
-\item \(\operatorname{CE}_l(\cdot)\) denotes candidate elimination at layer \(l\);
-\item \(\bar{U}_l\) is the token sequence after optional CE pruning.
-}
 
 Candidate elimination is specific to OSTrack and is not part of the original ViT architecture. It is only present when
 CE pruning is enabled. The detailed CE mechanism is described separately in Section 2.3.
@@ -556,7 +519,7 @@ concatenation:
 
 \begin{equation}
 Z_{t,0}^{\mathrm{track}} = [T_0, S_{t,0}].
-\tag{2.7}
+\tag{2.6}
 \end{equation}
 
 After \(L\) transformer layers, the backbone output is
@@ -566,10 +529,11 @@ After \(L\) transformer layers, the backbone output is
 Z_{t,L}^{\mathrm{track}}
 &=
 \operatorname{ViTBackbone}\left(Z_{t,0}^{\mathrm{track}}\right)
-=
+\\
+&=
 [T_L^{(t)}, S_{t,L}].
 \end{aligned}
-\tag{2.8}
+\tag{2.7}
 \end{equation}
 \FormulaNotation{
 \item \(T_0 \in \mathbb{R}^{N_T \times D}\) is the template-token sequence;
@@ -580,30 +544,25 @@ Z_{t,L}^{\mathrm{track}}
 \item \(S_{t,L}\) is the processed search-token representation.
 }
 
-
-
 The final search-token representation \(S_{t,L}\) is reshaped into a spatial feature map and passed to the prediction
 head.
 
 \section{Candidate elimination}\label{candidate-elimination}
 
-OSTrack introduces candidate elimination (CE) to reduce the number of search tokens
-processed by the transformer backbone. In a template-search tracker, the search crop
-contains both the target and many background patches. CE removes search tokens that are
-unlikely to correspond to the target, reducing computation while keeping the most
-relevant candidates {[}13{]}.
+OSTrack introduces candidate elimination (CE) to reduce the number of search tokens processed by the transformer
+backbone. In a template-search tracker, the search crop contains both the target and many background patches. CE removes
+search tokens that are unlikely to correspond to the target, reducing computation while keeping the most relevant
+candidates [13].
 
-OSTrack chooses candidates using attention between the template and search tokens. After
-the multi-head attention operation in a transformer block, a representative template
-token is used to score the search tokens. In the standard setting, this representative
-token is the center template token, because the target is normally centered in the
-template crop. If this token is denoted by \(\phi\) and the transformer has \(M\)
-attention heads, the score of search token \(x\) is computed by averaging attention from
-\(\phi\) to \(x\) over all heads:
+OSTrack chooses candidates using attention between the template and search tokens. After the multi-head attention
+operation in a transformer block, a representative template token is used to score the search tokens. In the standard
+setting, this representative token is the center template token, because the target is normally centered in the template
+crop. If this token is denoted by \(\phi\) and the transformer has \(M\) attention heads, the score of search token
+\(x\) is computed by averaging attention from \(\phi\) to \(x\) over all heads:
 
 \begin{equation}
 w_x^{\phi} = \frac{1}{M}\sum_{m=1}^{M} w_x^{\phi}(m).
-\tag{2.9}
+\tag{2.8}
 \end{equation}
 \FormulaNotation{
 \item \(w_x^{\phi}\) is the averaged attention score from the representative template token to search token \(x\);
@@ -619,8 +578,8 @@ removed from the sequence for later transformer layers. If \(k\) tokens are kept
 \(n\) current search tokens, the keep ratio is:
 
 \begin{equation}
-\k = \frac{rho}{n}.
-\tag{2.10}
+k = \rho n.
+\tag{2.9}
 \end{equation}
 \FormulaNotation{
 \item \(\rho\) is the keep ratio;
@@ -632,7 +591,7 @@ The kept search-token indices can be written as:
 
 \begin{equation}
 I_{\text{keep}} = \operatorname{TopK}(w_x^{\phi}, k).
-\tag{2.11}
+\tag{2.10}
 \end{equation}
 \FormulaNotation{
 \item \(I_{\text{keep}}\) is the set of retained search-token indices;
