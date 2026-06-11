@@ -92,7 +92,7 @@
 
     This thesis investigates a memory extension of OSTrack, a state-of-the-art one-stream transformer tracker, MemOSTrack. OSTrack serves as a strong baseline because it jointly processes template and search tokens in a single transformer backbone. The thesis proposes the extension of the original template-search token sequence with explicit recurrent memory tokens. These memory tokens are continuously updated through self-attention within the Vision Transformer and a Gated Recurrent Unit (GRU) mechanism. This update combines temporal information from previous frames with layer-wise memory refinement, granting the tracker an explicit recurrent state while preserving the core structure of the baseline.
 
-    The scope of this work extends beyond architectural modifications to address the challenges of training a recurrent model built on a strong baseline. Because independent frame pairs are insufficient for learning temporal dynamics, the training pipeline was substantially restructured to use ordered video sequences and inference-like dynamic search cropping. By generating subsequent search crops from the model's own predictions rather than ground-truth annotations, the training conditions closely mirror real-world inference, forcing the model to learn how to recover from tracking drift. Furthermore, to prevent the network from bypassing the newly added memory pathway, explicit and implicit supervision strategies were explored. Auxiliary memory loss heads were designed to make the memory tokens predictive, while template blurring was introduced as a regularization strategy to weaken the network's over-reliance on the clean initial template.
+    The scope of this work also includes the training changes required for a recurrent tracker built on a strong baseline. The training pipeline was restructured to use ordered video sequences and inference-like dynamic search cropping. In addition, auxiliary memory losses and template blurring were explored as strategies for encouraging the model to use the newly added memory pathway.
 
     Additionally, while Single-Object Tracking (SOT) is utilized as a rigorous test framework for this research—providing well-established datasets, metrics, and baselines—the core contributions of this work are not strictly limited to tracking. The proposed integration of recurrent memory tokens, layer-wise GRU updates, and dynamic sequence training might also be useful for broader video processing tasks requiring efficient, long-term temporal modeling in Vision Transformers.
 
@@ -243,10 +243,7 @@
     first frame and do not maintain an explicit updated visual template during inference.
     This makes the tracker dependent on the initial target appearance. If the target rotates,
     deforms, changes illumination, or becomes partially occluded, the initial template may no
-    longer describe the current appearance well. The proposed memory mechanism is designed to reduce this limitation.
-    MemOSTrack adds latent recurrent memory tokens inside the transformer
-    token sequence. These memory tokens are intended to store additional temporal cues about
-    the changing target appearance.
+    longer describe the current appearance well. This limitation motivates the temporal memory mechanism developed in this thesis.
 
 
     \section{Evaluation metrics and common benchmarks}\label{evaluation-metrics-and-common-benchmarks}
@@ -1157,7 +1154,7 @@
     \end{longtable}
 
     The final MemOSTrack configuration improves upon the reported same-resolution OSTrack-256 + CE baseline across all three
-    metrics, achieving gains of +0.019 in AO, +0.019 in SR0.50, and +0.011 in SR0.75. This shows that the complete MemOSTrack training pipeline can improve tracking accuracy at the same search resolution. However, because the final model combines several changes: memory tokens, GRU-based updates, sequence-based training, dynamic cropping, and auxiliary supervision strategies, a full ablation study would be required to separate the contribution of each component.
+    metrics, achieving gains of +0.019 in AO, +0.019 in SR0.50, and +0.011 in SR0.75. This shows that the complete MemOSTrack training pipeline can improve tracking accuracy at the same search resolution.
 
     The result remains slightly below the reported OSTrack-384 + CE baseline. This is expected, because the 384-resolution baseline processes a larger template and search region, giving it access to finer spatial detail. MemOSTrack-256 closes part of the gap to this stronger high-resolution model, but it does not surpass it.
 
@@ -1203,7 +1200,7 @@
 
     The training curve shows rapid early convergence during the initial warm-up phase, in which the model is trained with standard ground-truth-centered crops. In this period, the total training loss decreases sharply from 2.033 to 0.547, while the training IoU climbs to approximately 0.870.
 
-    Between epochs 21 and 40, template blurring was introduced to the training pipeline. During this phase, the standard training IoU remained stable and high. More importantly, the model's performance on specifically corrupted templates, tracked via the separate \texttt{Blur/IoU} metric, steadily improved from 0.849 at epoch 21 to a peak of 0.875 at epoch 39. This upward trend indicates that the network successfully adapted to the degraded initial template, forcing it to rely more heavily on the recurrent memory state to maintain accurate localization.
+    Between epochs 21 and 40, template blurring was introduced to the training pipeline. During this phase, the standard training IoU remained stable and high. More importantly, the model's performance on specifically corrupted templates, tracked via the separate \texttt{Blur/IoU} metric, steadily improved from 0.849 at epoch 21 to a peak of 0.875 at epoch 39. This upward trend indicates that the network successfully adapted to the degraded initial template.
 
     At epoch 41, template blurring was disabled, and the training pipeline transitioned to the inference-like dynamic
     rollout setting. This shift intentionally introduced a significantly harder optimization objective, as the model was now
@@ -1221,10 +1218,8 @@
 
     \section{Limitations and Future Work}\label{limitations-and-future-work}
 
-    The main limitation of this thesis is that the final experiment tests all proposed
-    changes together. The final MemOSTrack model combines memory tokens, a GRU-based memory
-    update, a modified sequence-based training loop, dynamic search cropping, auxiliary
-    memory losses, and template blurring. Because these changes were not tested separately,
+    Because the final model combines several changes: memory tokens, GRU-based updates, sequence-based training, dynamic cropping, and auxiliary supervision strategies, a full ablation study would be required to separate the contribution of each component.
+    Since these changes were not tested separately,
     the final result cannot show how much each component contributed to the improvement over
     the OSTrack-256 + CE baseline.
 
@@ -1234,21 +1229,45 @@
     independently. This would make it possible to understand which parts of the pipeline are
     most important and which parts mainly add complexity.
 
-    Additonaly, since memory tokens and GRU updates increase the amount of computation compared with the original OSTrack-256 + CE baseline. Testing different numbers of memory tokens, shorter and longer sequence rollouts, and simpler memory-update variants would help determine whether similar accuracy can be achieved with lower computational cost.
+    Additioonaly, Future work should also analyze the computational trade-off introduced by the memory mechanism. Since memory tokens and GRU updates increase the amount of computation compared with the original OSTrack-256 + CE baseline. Testing different numbers of memory tokens, shorter and longer sequence rollouts, and simpler memory-update variants would help
+    determine whether similar accuracy can be achieved with lower computational cost.
 
 
     \chapter*{Conclusion}
     \addcontentsline{toc}{chapter}{Conclusion}
 
-    This thesis investigated the integration of recurrent memory tokens into OSTrack. The proposed MemOSTrack model extends the original one-stream transformer tracker with memory tokens updated through ViT and a two-stage GRU update mechanism. The design is intended to provide both temporal continuity and layer-wise memory refinement.
+    This thesis investigated the integration of recurrent memory tokens into OSTrack, a
+    one-stream transformer tracker for single-object tracking. The proposed MemOSTrack
+    model extends the original template-search token sequence with memory tokens that are
+    updated through the ViT backbone and a two-stage GRU mechanism. The goal of this design
+    is to provide the tracker with an explicit recurrent state while preserving the main
+    structure of the OSTrack baseline.
 
-    To effectively train this recurrent architecture, the standard training pipeline was substantially restructured. The original independent pair-based sampling was replaced with sequence-based sampling and inference-like dynamic search cropping, allowing the memory state to evolve over ordered video frames. By generating subsequent search crops from the model's own predictions rather than ground-truth annotations, the training conditions were brought closer to real-world inference, forcing the model to learn how to recover from tracking drift.
+    Since recurrent memory cannot be trained effectively with independent frame pairs, the
+    training pipeline was also modified. The original pair-based sampling was replaced with
+    ordered sequence-based training, and inference-like dynamic search cropping was
+    introduced so that later search crops depend on the model's own previous predictions.
+    Auxiliary memory supervision and template blurring were also explored as ways to
+    encourage the model to use the newly introduced memory stream.
 
-    Because a strong baseline tracker can easily bypass newly added modules, explicit and implicit supervision strategies were explored to ensure the memory tokens were actively utilized. Auxiliary memory loss heads were designed to force the memory tokens to encode discriminative spatial features. Concurrently, template blurring was introduced as a regularization technique to reduce the network's over-reliance on the clean initial template, thereby encouraging the extraction of temporal cues from the memory stream.
+    On the GOT-10k benchmark, the final MemOSTrack-256 + CE model achieved an AO of 0.729,
+    an SR0.50 of 0.823, and an SR0.75 of 0.693. This improves over the reported
+    same-resolution OSTrack-256 + CE baseline, while remaining below the stronger
+    high-resolution OSTrack-384 + CE baseline. These results suggest that the complete
+    MemOSTrack pipeline is a promising extension of OSTrack, but they do not isolate the
+    contribution of each individual component.
 
-    In experimental evaluations on the GOT-10k benchmark, the final MemOSTrack-256 + CE model achieved an AO of 0.729, an SR0.50 of 0.823, and an SR0.75 of 0.693. These results show that the complete MemOSTrack configuration improves over the reported same-resolution OSTrack-256 + CE baseline. However, because several modifications were evaluated jointly, future ablation studies are required to determine the individual contributions of the memory tokens, the GRU mechanism, and the dynamic training pipeline to the overall performance gain.
+    The main direction for future work is therefore a systematic ablation study. The effects
+    of memory tokens, the GRU update, the sequence-based training loop, dynamic cropping,
+    auxiliary memory losses, and template blurring should be evaluated in separate test
+    runs. Such experiments would make it possible to determine which parts of the proposed
+    pipeline are most important and how the method can be simplified or improved further.
 
-    While Single-Object Tracking (SOT) served as a rigorous and highly useful test framework with established datasets and baselines for this research, the core contributions of this work are not strictly limited to tracking. The proposed integration of recurrent memory tokens, layer-wise GRU updates, and dynamic sequence training might also be useful for broader video processing tasks requiring efficient, long-term temporal modeling in Vision Transformers.
+    Although this thesis evaluated the method in the context of Single-Object Tracking,
+    the proposed combination of recurrent memory tokens, layer-wise GRU updates, and
+    dynamic sequence training may also be relevant to broader video-processing tasks that
+    require compact long-term temporal modeling in Vision Transformers.
+
 
     \clearpage
     \phantomsection
@@ -1348,18 +1367,24 @@
 
     \section*{Extending OSTrack with GRU-Based Memory Tokens for Visual Object Tracking}
 
-    The thesis studies whether a transformer-based tracker can benefit from explicit
-    recurrent memory. OSTrack is selected as the baseline because it is a strong one-stream
-    tracker that jointly processes template and search tokens. The proposed MemOSTrack
-    model inserts memory tokens into this token sequence. A transformer layer first produces
-    candidate memory, after which a two-stage GRU update combines the candidate with
-    previous-frame memory and previous-layer memory.
+    This thesis studies whether a transformer-based visual tracker can benefit from an
+    explicit recurrent memory mechanism. OSTrack is selected as the baseline because it is a
+    strong one-stream tracker that jointly processes template and search tokens inside a
+    single Vision Transformer backbone. The proposed MemOSTrack model extends this token
+    sequence with recurrent memory tokens.
 
-    A major part of the work is the training pipeline. The original pair-based sampler was
-    not sufficient because recurrent memory needs ordered video frames. Therefore, the
-    sampler was rewritten to return causal consecutive search sequences. The final pipeline
-    also uses dynamic search cropping, where each next search crop is produced from the
-    previous prediction. This makes training closer to real inference.
+    Two memory-update designs are discussed. The first design lets the transformer update
+    the memory tokens directly. The final design instead treats the transformer output as a
+    candidate memory representation and updates it with a two-stage GRU mechanism. This
+    update combines information from the previous frame and the previous transformer layer,
+    giving the memory stream both temporal and layer-wise connections.
+
+    A major part of the work is the training pipeline. Standard OSTrack training uses
+    independent template-search pairs, which is not sufficient for learning recurrent
+    memory. Therefore, the sampler was rewritten to return ordered video sequences. The
+    final pipeline also uses dynamic search cropping, where each next search crop is
+    generated from the previous model prediction rather than from the current ground-truth
+    box. This makes training closer to real tracking inference.
 
     The thesis also discusses memory loss heads and template blurring. Memory loss heads
     were introduced to prevent the model from ignoring memory tokens. Template blurring was
@@ -1368,11 +1393,9 @@
 
     The final evaluation shows that MemOSTrack-256 + CE achieved AO 0.729, SR0.50
     0.823, and SR0.75 0.693. These results are higher than the reported OSTrack-256 + CE
-    baseline, but lower than the reported OSTrack-384 + CE baseline. The main conclusion is
-    that the final MemOSTrack configuration is higher than the reported same-resolution 256 CE setting, but
-    does not yet surpass the higher-resolution 384 CE model. Further optimization and
-    ablation studies are required to separate the effects of memory, dynamic cropping,
-    candidate elimination, and resolution.
+    baseline, but lower than the reported OSTrack-384 + CE baseline. Further ablation
+    studies are required to separate the effects of the individual components in the final
+    pipeline.
 
     \chapter*{Abbreviations}
     \addcontentsline{toc}{chapter}{Abbreviations}
