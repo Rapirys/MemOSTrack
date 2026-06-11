@@ -80,45 +80,15 @@
     \chapter*{Introduction}
     \addcontentsline{toc}{chapter}{Introduction}
 
-    Visual object tracking is the task of locating a target object throughout a video after
-    the target has been specified in the first frame. The tracker receives an initial
-    bounding box and then predicts the target position in each subsequent frame. Although
-    the input definition is simple, the task is challenging because the target can move,
-    change scale, deform, become partially occluded, or appear in a cluttered background.
-    A tracker must therefore combine the initial target description with current visual
-    evidence and, ideally, with temporal information collected during the sequence.
+    Modern visual object tracking relies heavily on matching an initial target template to a current search region. While transformer-based architectures have achieved remarkable success in this spatial matching task, they typically process frames independently, lacking an explicit mechanism to accumulate temporal information over the course of a video. Consequently, these models struggle when the target undergoes severe deformation, occlusion, or long-term appearance changes.
 
-    This thesis investigates a memory extension of OSTrack, a one-stream transformer
-    tracker. OSTrack is a suitable baseline because it jointly processes template and search
-    tokens in a single transformer backbone. The goal of this work is not to replace the
-    whole tracker, but to test whether explicit recurrent memory tokens can be inserted into
-    the OSTrack token stream and trained on video sequences in a meaningful way.
+    This thesis investigates a memory extension of OSTrack, a state-of-the-art one-stream transformer tracker, MemOSTrack. OSTrack serves as a strong baseline because it jointly processes template and search tokens in a single transformer backbone. The thesis proposes the extantion of the original template-search token sequence with explicit recurrent memory tokens. These memory tokens are continuously updated through self-attention within the Vision Transformer and a Gated Recurrent Unit (GRU) mechanism. This update combines temporal information from previous frames with layer-wise memory refinement, granting the tracker an explicit recurrent state while preserving the core structure of the baseline.
 
-    The proposed experimental model is called MemOSTrack. It extends the original
-    template-search token sequence with memory tokens and updates these tokens using a
-    two-stage gated recurrent unit (GRU) mechanism. The update combines temporal information
-    from previous frames with layer-wise memory refinement. This design is intended to give
-    the tracker an explicit recurrent state while preserving the main structure of the
-    OSTrack baseline.
+    The scope of this work extends beyond architectural modifications to address the challenges of training a recurrent model built on a strong baseline. Because independent frame pairs are insufficient for learning temporal dynamics, the training pipeline was substantially restructured to use ordered video sequences and inference-like dynamic search cropping. By generating subsequent search crops from the model's own predictions rather than ground-truth annotations, the training conditions closely mirror real-world inference, forcing the model to learn how to recover from tracking drift. Furthermore, to prevent the network from bypassing the newly added memory pathway, explicit and implicit supervision strategies were explored. Auxiliary memory loss heads were designed to make the memory tokens predictive, while template blurring was introduced as a regularization strategy to weaken the network's over-reliance on the clean initial template.
 
-    The work is not limited to an architectural change. Independent template-search frame
-    pairs are insufficient for training the recurrent memory state in a realistic way,
-    because the memory state should evolve over an ordered sequence of frames. For this
-    reason, the sampling pipeline was first rewritten to return video frames as ordered
-    sequences. It was later extended with dynamic search cropping, where the next search
-    crop is generated from the previous prediction rather than from the current ground-truth
-    target position. This final version better matches the inference setting, where the
-    tracker does not know the target box after initialization.
+    Additionaly, while Single-Object Tracking (SOT) is utilized as a rigorous test framework for this research—providing well-established datasets, metrics, and baselines—the core contributions of this work are not strictly limited to tracking. The proposed integration of recurrent memory tokens, layer-wise GRU updates, and dynamic sequence training provides a robust foundation that can be adapted for broader video processing tasks requiring efficient, long-term temporal modeling in Vision Transformers.
 
-    The thesis also studies a practical problem that appears when adding memory to a strong
-    baseline: the new memory branch can be ignored. Auxiliary memory loss heads were
-    explored to make memory tokens predictive, and template blurring was considered as a
-    regularization strategy that weakens over-reliance on the clean initial template. These
-    ideas do not guarantee improvement, but they broaden the study from an architectural
-    modification to the training and supervision conditions required for a memory pathway to
-    carry useful temporal information.
-
-    The main contributions of the thesis are:
+    The main contributions of this thesis are:
 
     \begin{itemize}
         \tightlist
@@ -143,42 +113,15 @@
 
     \section{Single-object tracking}\label{single-object-tracking}
 
-    Single-object tracking is a sequential computer vision problem. In the first frame of a
-    video, the target is identified by a bounding box. In later frames, the tracker predicts
-    the target location without receiving additional manual annotation. This distinguishes
-    tracking from ordinary object detection: the class of the object is not enough, because
-    the tracker must follow a particular instance. If several similar objects are present,
-    the correct output is the original target, not merely any object of the same category.
+    Single-Object Tracking (SOT) is fundamentally a sequential computer vision problem. In the first frame of a video, a target is identified by a bounding box. In all subsequent frames, the tracker must predict the target's location without receiving any additional manual annotation. This strict initialization distinguishes tracking from ordinary object detection: identifying the class of the object is insufficient, as the tracker must follow a specific instance. If several visually similar objects are present in the scene, the correct output is the original target, not merely any object of the same category.
 
     \emph{Given frames \(I_1, I_2, \ldots, I_T\) and the initial box \(B_1\), a tracker predicts boxes \(\hat{B}_t\) for \(t > 1\).}
 
-    The tracker may also maintain an internal state. A memory-free tracker can be written as
-    a function of the template and the current search region, while a recurrent tracker
-    additionally uses a state carried from previous frames. This distinction is central to
-    this thesis, because MemOSTrack explicitly introduces recurrent memory tokens into
-    the OSTrack backbone.
+    Based on how they process this sequence, trackers can be divided into two categories. A stateless \textbf{memory-free tracker} can be written purely as a function of the initial template and the current search region, treating each frame independently. In contrast, a \textbf{recurrent tracker} additionally utilizes a hidden state carried forward from previous frames to accumulate temporal context. This distinction is central to this thesis, as MemOSTrack explicitly transitions a stateless baseline (OSTrack) into a recurrent tracker by introducing memory tokens into the backbone.
 
-    Tracking is difficult because the visual appearance of the target is not fixed. The
-    target may rotate, deform, change illumination, become blurred by motion, or be partly
-    hidden. The background can contain objects that look similar to the target. The camera
-    may move, producing large apparent target displacement between frames. A tracking method
-    must therefore balance stability and adaptability: it should not drift to a distractor,
-    but it must adapt when the true target changes appearance.
+    Early tracking methods were mainly based on hand-crafted appearance and motion models, including mean-shift tracking [1], optical flow-based methods [2][16], particle filters [3], and template matching approaches [4]. These methods were often efficient and conceptually simple, but they struggled under large appearance changes, occlusion, background clutter, and scale variation. Around the early 2010s, discriminative correlation filter trackers became one of the dominant families in visual tracking. Methods such as MOSSE [5], CSK [6], KCF [7], and DSST [8] learned online filters that could localize the target efficiently in the frequency domain, while DSST also introduced a separate scale estimation mechanism. Later, more advanced correlation-filter trackers such as ECO [9] improved robustness by using more compact model updates and stronger feature representations. This period is commonly treated as the correlation-filter era of SOT, before deep Siamese and transformer-based trackers became the dominant direction.
 
-    Single-object tracking (SOT) is the task of localizing the same target object throughout
-    a video sequence, given only its bounding box in the first frame. Early tracking methods
-    were mainly based on hand-crafted appearance and motion models, including mean-shift
-    tracking [1], optical flow-based methods [2][16] , particle filters [3], and template
-    matching approaches [4]. These methods were often efficient and conceptually simple,
-    but they struggled under large appearance changes, occlusion, background clutter, and
-    scale variation. Around the early 2010s, discriminative correlation filter trackers
-    became one of the dominant families in visual tracking. Methods such as MOSSE [5], CSK
-    [6], KCF [7], and DSST [8] learned online filters that could localize the target
-    efficiently in the frequency domain, while DSST also introduced a separate scale
-    estimation mechanism. Later, more advanced correlation-filter trackers such as ECO [9]
-    improved robustness by using more compact model updates and stronger feature
-    representations. This period is commonly treated as the correlation-filter era of SOT,
-    before deep Siamese and transformer-based trackers became the dominant direction.
+    Despite these algorithmic advancements, tracking remains an inherently difficult task because the visual appearance of the target is rarely fixed. The target may rotate, deform, change illumination, become blurred by motion, or be partly hidden. Furthermore, the camera itself may move, producing large apparent target displacements between frames. A successful tracking method must therefore balance stability and adaptability: it must not drift to a background distractor, yet it must adapt when the true target changes appearance. Table~\ref{tab:tracking-challenges} summarizes the most common tracking challenges encountered in SOT benchmarks.
 
     \begin{longtable}[]{@{}
             >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.1449}}
@@ -212,7 +155,7 @@
     \section{From Siamese trackers to transformer trackers}\label{from-siamese-trackers-to-transformer-trackers}
 
     The state of the art in single-object tracking has largely focused on template-to-target
-    matching, where the tracker relies on visual cues from two image regions: a template
+    matching using neural networks and modern machine learning techniques, where the tracker relies on visual cues from two image regions: a template
     crop that describes the target appearance and a search crop in which the target has to
     be localized. A major step in this direction was introduced by SiamFC [10], which
     formulated tracking as a fully convolutional Siamese matching problem between an
@@ -250,16 +193,7 @@
     representations, while tracker training teaches the model how to use these
     representations for target localization and target-background discrimination.
 
-    Another important family of trackers is represented by DiMP [15]. Unlike purely
-    Siamese approaches that mainly compare a fixed template with the current search region,
-    DiMP learns a discriminative target model during tracking. Its main idea is to predict a
-    target-specific classifier that can distinguish the target from the background using
-    information available from the video sequence. This makes DiMP especially relevant to
-    this thesis because it explicitly uses sequence information to adapt the target model
-    online, instead of relying only on a static initial template.
-    DiMP-style trackers are architecturally different from the standard siamese and show that
-    online adaptation and sequence-level information can improve tracking robustness. This
-    motivates the idea of adding recurrent memory to a template-search transformer tracker.
+    Another distinct and highly influential approach worth mentioning was introduced by DiMP [15]. Unlike standard Siamese networks that simply compare the current search region against a fixed initial template, DiMP dynamically optimizes a discriminative target model during inference. By leveraging historical sequence information, it continuously updates a classifier to distinguish the target from background distractors. While DiMP relies on an explicit optimization module rather than a transformer architecture, its success shows that incorporating sequence-level information and online adaptation can significantly improve tracking robustness.
 
 
     \section{Template and Search Crop Notation}\label{template-and-search-crop-notation}
@@ -409,8 +343,8 @@
     \section{OSTrack Tracker}\label{ostrack-tracker}
 
     OSTrack is a real-time single-object visual tracker introduced by Ye et al. in \emph{Joint Feature Learning and Relation
-    Modeling for Tracking: A One-Stream Framework}, accepted at ECCV 2022 {[}13{]}. It is used in this thesis as the baseline
-    tracker because it provides a strong transformer-based architecture while keeping the tracking pipeline relatively
+    Modeling for Tracking: A One-Stream Framework}, accepted at ECCV 2022 {[}13{]}. It is used as the baseline
+    tracker in this thesis because it provides a strong transformer-based architecture while keeping the tracking pipeline relatively
     simple.
 
     During inference, OSTrack processes one search frame at a time. It receives a fixed template crop from the first
@@ -471,8 +405,8 @@
         \item \(X_p\) is the sequence of all flattened patch vectors.
     }
 
-    A standard ViT encoder layer applies a pre-normalized multi-head self-attention block followed by a pre-normalized MLP
-    block, with residual connections in both cases. In the CE-enabled OSTrack backbone, candidate elimination is inserted
+    A standard ViT encoder layer applies a pre-normalized multi-head self-attention block followed by a pre-normalized per-token MLP
+    block, with residual connections after both. In the CE-enabled OSTrack backbone, candidate elimination is inserted
     between the attention block and the MLP block. This gives the following \(\operatorname{ViTBackbone}\) layer update:
 
     \begin{align}
