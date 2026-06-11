@@ -186,8 +186,8 @@
     mechanisms to allow richer interaction between template and search features.
 
     It is also important to note that feature extraction in modern trackers is often based
-    on pretrained backbones. These backbones are trained on large-scale image or video
-    datasets before being adapted to tracking. This is important because tracking datasets
+    on pretrained backbones. These backbones are pretrained on large-scale image or video
+    datasets before being adapted to tracking.  Because tracking datasets
     alone are usually not sufficient for learning strong low-level and semantic visual
     features from scratch. In practice, the pretrained backbone provides general visual
     representations, while tracker training teaches the model how to use these
@@ -248,7 +248,7 @@
     under a common protocol, using the same test sequences and the same localization
     measures.
 
-    In this thesis, the main benchmark is GOT-10k. GOT-10k is a generic object tracking
+    The main benchmark used in this thesis is GOT-10k. GOT-10k is a generic object tracking
     benchmark designed to evaluate how well a tracker generalizes to unseen object classes
         {[}17{]}. It follows a one-shot tracking protocol: the target is specified by a bounding box
     in the first frame, and the tracker must localize the same object in the remaining
@@ -311,14 +311,14 @@
     In such cases, a tracker needs a mechanism that can dynamically encode the most relevant
     appearance cues from previous frames instead of relying only on the first template.
 
-    Second, tracking is inherently temporal, a simple example can make it clear makes this clear.
-    Imagine looking at a patch of grass and trying to identify a camouflaged snake.
-    In that one image, the snake may be almost indistinguishable from the background,
+    Second, tracking is inherently temporal, a simple example can make it clear.
+    Imagine looking at a patch of grass and trying to identify a camouflaged snake,
+    in that one image, the snake may be almost indistinguishable from the background,
     however, once the video starts playing, coherent movement across consecutive frames can
     make the same object visible. The object has not necessarily changed its appearance, but
-    the temporal context makes it easier to separate from the background. Additionally, a temporal memory can potentially
-    encode motion cues. A memory state does not need
-    to store only appearance; it can also learn information about recent target movement,
+    the temporal context makes it easier to separate from the background. Additionally, a memory state does not need
+    to store only appearance; it can potentially
+    encode motion cues, learn information about recent target movement:
     direction, speed, and stable object identity across frames. This can be useful when the
     current frame is ambiguous, because the previous trajectory and recent observations can
     provide additional evidence about where the target is likely to be.
@@ -365,8 +365,7 @@
     The backbone is initialized from a pretrained ViT model.
 
     OSTrack also supports candidate elimination, which progressively removes less relevant search
-    tokens to reduce computation; this mechanism is described separately in Section 2.3. For this thesis, the most important
-    property is that OSTrack has strong template-search interaction, but no explicit recurrent memory state across frames.
+    tokens to reduce computation; this mechanism is described separately in Section 2.3.
 
 
     \section{ViT Backbone}\label{vit-backbone}
@@ -438,8 +437,8 @@
         \item \(\operatorname{MLP}(\cdot)\) denotes the feed-forward block.
     }
 
-    Multi-head self-attention allows each token to aggregate information from other tokens in the same sequence. In OSTrack,
-    this is important because template and search tokens are processed together, so self-attention provides the mechanism
+    Multi-head self-attention allows each token to exchange information with other tokens in the same sequence. Since OSTrack,
+    template and search tokens are processed together, self-attention provides the mechanism
     through which template-search interaction occurs inside the backbone.
 
     Candidate elimination is specific to OSTrack and is not part of the original ViT architecture. It is only present when
@@ -812,32 +811,16 @@
         \item \(\text{sample}\) denotes one pair-based training sample;
         \item \(T\) is the template crop;
         \item \(S_t\) is the search crop at time \(t\);
-        \item \(B_t\) is the target box expressed in the coordinate system of the search crop;
+        \item \(B_t\) is the ground-truth target box expressed in the coordinate system of the search crop;
         \item \(\hat{B}_t\) is the predicted target box at time \(t\);
         \item \(f(\cdot)\) is the tracker model.
     }
-    Since the standard memory-free tracker model processes each training sample
-    independently, this setup is sufficient for its training.
+    Because the standard tracker is memory-free, processing each training sample independently is sufficient.
 
-    However, for correct MemOSTrack training, independent pair-based training is insufficient. If the model has a
-    memory state \(M_t\), then this state should be produced from earlier frames in the same
-    video. Resetting memory for every pair prevents the model from learning how memory
-    evolves across time, while carrying memory across unrelated samples would be incorrect.
+    However, for correct MemOSTrack training, independent pair-based training is inadequate. A recurrent memory state \(M_t\) must evolve over a continuous sequence of frames from the same video. The standard single-step horizon makes it impossible for the network to learn usefull long-term temporal dependencies. Conversely, carrying the memory state forward across randomly sampled, unrelated pairs would feed the model incorrect historical context.
 
-    The sampler was therefore changed to return ordered search-frame sequences. In the
-    causal consecutive setting, the sampled frames follow the same temporal direction as
-    inference:
-
-    \begin{equation}
-        F_t, F_{t+1}, \dots, F_{t+N-1}.
-    \end{equation}
-    \FormulaNotation{
-        \item \(F_t\) is the video frame at time \(t\);
-        \item \(N\) is the number of sampled search frames;
-        \item \(F_{t+N-1}\) is the final frame in the sampled ordered sequence.
-    }
-
-    The training sample becomes:
+    Therefore, the sampling pipeline was rewritten to return ordered search-frame sequences. In this
+    causal consecutive setting, the sampled frames follow the natural temporal direction of the video. The training sample becomes:
 
     \begin{equation}
         \text{sample} = (T, S_1, S_2, \dots, S_N, B_1, B_2, \dots, B_N).
@@ -845,16 +828,12 @@
     \FormulaNotation{
         \item \(\text{sample}\) denotes one sequence-based training sample;
         \item \(T\) is the template crop;
-        \item \(S_1, S_2, \dots, S_N\) are ordered search crops;
+        \item \(S_1, S_2, \dots, S_N\) are ordered search crops from the same video;
         \item \(B_1, B_2, \dots, B_N\) are the corresponding target boxes;
         \item \(N\) is the number of search frames in the sampled sequence.
     }
 
-    For each search frame, the model predicts a box and updates its memory state. The memory
-    output from one frame becomes the memory input for the next frame. The important point is
-    that the order is preserved: frame \(t\) is processed after frame \(t-1\), not as an
-    independent shuffled sample. This gives the recurrent memory module a meaningful temporal
-    path during training.
+    For each frame in the sequence, the model predicts a bounding box and updates its memory state. The memory output from frame \(t-1\) becomes the input for frame \(t\). Preserving this exact temporal order provides the recurrent memory module with a meaningful path to learn across time.
 
 
     \section{Dynamic inference-like search cropping}\label{dynamic-search-cropping}
@@ -866,20 +845,7 @@
     crop, and the model does not experience the consequences of its own previous prediction
     errors.
 
-    During inference, the tracker does not know the current ground-truth target location.
-    The next search crop must be generated from the previous prediction:
-
-    \begin{equation}
-        S_t = \operatorname{crop}(I_t, \hat{B}_{t-1}).
-    \end{equation}
-    \FormulaNotation{
-        \item \(S_t\) is the search crop at time \(t\);
-        \item \(\operatorname{crop}(\cdot,\cdot)\) is the crop extraction operation;
-        \item \(I_t\) is the full image at time \(t\);
-        \item \(\hat{B}_{t-1}\) is the predicted bounding box from the previous frame.
-    }
-
-    Ground-truth-centered training instead uses:
+    In standard ground-truth-centered training, the search crop is generated using the ground-truth box of the current frame:
 
     \begin{equation}
         S_t = \operatorname{crop}(I_t, B^{gt}_t).
@@ -890,18 +856,23 @@
         \item \(B^{gt}_t\) is the ground-truth target box at time \(t\).
     }
 
-    These two settings are fundamentally different. The ground-truth-centered crop uses information that
-    is unavailable during inference, while the prediction-centered crop allows localization
-    errors to influence later inputs. This difference is especially important for recurrent
-    memory because an incorrect crop can also affect the memory state passed to later
-    frames.
+    To simulate imperfect localization, standard training applies artificial random jitter to this ground-truth box. However, even with this jitter, the inputs remain fundamentally disconnected from the model's actual performance. Because every crop is anchored to the true target location, the model never experiences the compounding prediction errors that occur during real tracking.
 
-    The final training pipeline therefore introduced inference-like search cropping. The tracker
-    state is initialized from the first-frame ground-truth box, but later crops are generated
-    from the model's own previous predictions. At each step, the model receives the template,
-    the current search crop, and the current memory state; it predicts a target box, updates
-    memory, maps the prediction back to image coordinates, and uses that prediction to crop
-    the next frame:
+    During inference, the tracker does not know the current ground-truth target location.
+    The next search crop must be generated from the previous prediction:
+
+
+    \begin{equation}
+        S_t = \operatorname{crop}(I_t, \hat{B}_{t-1}).
+    \end{equation}
+    \FormulaNotation{
+        \item \(\hat{B}_{t-1}\) is the predicted bounding box from the previous frame.
+    }
+
+    This prediction-centered cropping allows localization errors to accumulate. A poor prediction in one frame will shift the target away from the center in the next frame, potentially leading to complete tracking failure. This difference is especially critical for a recurrent tracker, as an inaccurate crop will directly corrupt the memory state passed to subsequent frames.
+
+
+    To close this gap, the final training pipeline introduces inference-like dynamic search cropping. The tracker is initialized using the first-frame ground truth, but all subsequent crops in the sequence are generated dynamically from the model's predictions. At each step, the model processes the template, the current search crop, and the previous memory state to predict the new target box and update the memory:
 
     \begin{equation}
         \begin{aligned}
@@ -910,9 +881,8 @@
         \end{aligned}
     \end{equation}
     \FormulaNotation{
-        \item \(S_t\) is the search crop generated for frame \(t\);
-        \item \(I_t\) is the full image at time \(t\);
-        \item \(\hat{B}_{t-1}\) is the previous predicted box used as the crop state;
+        \item \(S_t\) is the search crop generated dynamically for frame \(t\);
+        \item \(\hat{B}_{t-1}\) is the previous predicted box used to center and scale the crop;
         \item \(\hat{B}_t\) is the predicted box at time \(t\);
         \item \(M_t\) is the updated memory state at time \(t\);
         \item \(T\) is the template crop;
@@ -920,15 +890,9 @@
         \item \(f(\cdot)\) is the MemOSTrack model.
     }
 
-    This dynamic loop makes training intentionally harder. With ground-truth-centered crops, the model sees
-    clean examples even if its previous predictions would have been inaccurate. With dynamic
-    cropping, an early localization error can move the next crop away from the target
-    center, causing the target to appear near the edge, partially outside the crop, or
-    surrounded by distractors. However, this difficulty is necessary to close the gap between training and inference. If the
-    goal is to train a recurrent memory module, the memory must be exposed to realistic inputs and learn to recover from
-    drift.
+    This dynamic loop intentionally makes training more difficult. With ground-truth-centered crops, the model sees clean examples even if its previous predictions would have been inaccurate. With dynamic cropping, an early localization error can move the next crop away from the target center, which can cause the target to appear partially outside the crop. However, this difficulty is necessary to close the gap between training and inference and provides two major benefits. First, it allows the model to properly learn motion cues, as the displacement of the target within the crop directly reflects its actual movement relative to the previous frame. Second, it give the model an opporunity to learn how to recover from its own mistakes; by experiencing the consequences of poor predictions during training, the tracker learns to re-center the target and correct tracking drift before it leads to complete failure.
 
-    Because dynamic cropping makes optimization more difficult, the final training pipeline used a curriculum strategy.
+    Because dynamic cropping makes optimization more difficult, the final training pipeline used a curriculum training strategy.
     During the first 40 epochs, search crops were centered using ground-truth target boxes. After this warm-up phase,
     inference-like dynamic cropping was enabled, so each next crop was generated from the model's previous prediction. This
     allowed the model to first learn stable localization before being exposed to prediction drift.
@@ -989,7 +953,7 @@
     }
 
     The objective is to minimize the discrepancy between this predicted response map and the ground-truth Gaussian target
-    heatmap \(y_j\). The loss for the filter at frame \(t\) is formulated as the Mean Squared Error (MSE) over the sampled
+    heatmap \(y_j\). The loss for the filter at frame \(t\) is formulated as the means squared error over the sampled
     subset, combined with an \(L_2\) regularization penalty on the filter weights:
 
     \begin{equation}
