@@ -258,7 +258,7 @@
 
     The main benchmark used in this thesis is GOT-10k. GOT-10k is a generic object tracking
     benchmark designed to evaluate how well a tracker generalizes to unseen object classes
-        \cite{huang2021got10k}. It follows a one-shot tracking protocol: the target is specified by a bounding box
+    \cite{huang2021got10k}. It follows a one-shot tracking protocol: the target is specified by a bounding box
     in the first frame, and the tracker must localize the same object in the remaining
     frames. The test annotations are hidden, so final results are obtained through the
     official evaluation server.
@@ -1166,19 +1166,20 @@
     \begin{longtable}[]{@{}lrr@{}}
         \caption{Input-token budget and inference speed on NVIDIA RTX A6000.}\label{tab:speed-comparison} \\
         \toprule\noalign{}
-        \textbf{Method} & \textbf{Initial tokens} & \textbf{FPS} \\
+        \textbf{Method}     & \textbf{Initial tokens} & \textbf{FPS} \\
         \midrule\noalign{}
         \endhead
         \bottomrule\noalign{}
         \endlastfoot
-        OSTrack-256 + CE    & 320 & 131.46 \\
-        MemOSTrack-256 + CE & 384 & 97.73 \\
-        OSTrack-384 + CE    & 720 & 72.85 \\
+        OSTrack-256 + CE    & 320                     & 131.46       \\
+        MemOSTrack-256 + CE & 384                     & 97.73        \\
+        OSTrack-384 + CE    & 720                     & 72.85        \\
     \end{longtable}
 
     The measured speed confirms that the added recurrent memory is not computationally free. MemOSTrack-256 + CE runs at 97.73 FPS, compared with 131.46 FPS for the direct OSTrack-256 + CE baseline. This slowdown is expected because the memory tokens increase the sequence length processed by the transformer backbone and because the model also performs recurrent memory updates.
 
     At the same time, MemOSTrack-256 + CE remains substantially faster than the high-resolution OSTrack-384 + CE baseline, which runs at 72.85 FPS. This is important because ViT-based trackers are sensitive to sequence length, especially in the self-attention layers where the cost grows quadratically with the number of tokens. Although runtime is not determined by token count alone, the measured FPS supports the intended trade-off: MemOSTrack-256 improves over the same-resolution OSTrack-256 baseline while remaining more efficient than simply increasing the tracking resolution to 384. The remaining accuracy gap to OSTrack-384 + CE is therefore consistent with the larger spatial token budget and higher computational cost of the high-resolution model.
+
 
     \section{Training Dynamics}\label{training-dynamics}
 
@@ -1216,46 +1217,25 @@
 
     Overall, the training dynamics show that the model first learns stable localization under clean conditions, then adapts to corrupted-template training, and finally becomes robust to inference-like dynamic cropping.
 
-    \section{Limitations}\label{limitations}
-
-    The most important limitation is the lack of a full ablation study. Because multiple
-    changes were introduced, it is not possible to isolate the exact effect of each
-    component from the final table alone. For example, the gain over OSTrack-256 + CE may
-    come from memory tokens, dynamic cropping, candidate elimination interactions, training
-    differences, template blurring, auxiliary losses, or a combination of these factors.
-
-    The second limitation is that the memory mechanism was evaluated mainly on the standard
-    metrics. It may be more useful to analyze specific sequence attributes such as
-    occlusion, deformation, or long-term appearance change. If memory helps only in certain
-    cases, the average score may hide this benefit.
-
-    The third limitation is that memory loss heads were not fully optimized. The balance
-    between the main loss and memory loss is difficult and likely important. A scheduled
-    memory loss or a warm-up phase may be more stable than applying the full auxiliary loss
-    from the beginning.
 
 
-    \section{Future work}\label{future-work}
+    \section{Limitations and Future Work}\label{limitations-and-future-work}
 
-    Future work should begin with ablation experiments. The first ablation should compare
-    baseline OSTrack, OSTrack with sequence training but no memory, MemOSTrack with static
-    ground-truth-centered crops, and MemOSTrack with dynamic crops. This would separate the
-    effects of memory and cropping.
+    The main limitation of this thesis is that the final experiment tests all proposed
+    changes together. The final MemOSTrack model combines memory tokens, a GRU-based memory
+    update, a modified sequence-based training loop, dynamic search cropping, auxiliary
+    memory losses, and template blurring. Because these changes were not tested separately,
+    the final result cannot show how much each component contributed to the improvement over
+    the OSTrack-256 + CE baseline.
 
-    The second ablation should compare memory update mechanisms. A single temporal GRU, the
-    current two-stage GRU, and the three-way softmax gated update should be tested under the
-    same training conditions. This would reveal whether the layer-wise recurrent connection
-    is helpful.
+    Future work should therefore evaluate these components in separate test runs. In
+    particular, the effects of memory tokens, the GRU update, the recurrent training loop,
+    dynamic cropping, auxiliary memory losses, and template blurring should be studied
+    independently. This would make it possible to understand which parts of the pipeline are
+    most important and which parts mainly add complexity.
 
-    The third ablation should vary the memory supervision strategy. Possible variants
-    include no memory head, memory head after selected layers only, scheduled memory loss,
-    and different values of \texttt{lambda\_mem}. Template blurring should also be varied by blur
-    strength and probability.
+    Additonaly, since memory tokens and GRU updates increase the amount of computation compared with the original OSTrack-256 + CE baseline. Testing different numbers of memory tokens, shorter and longer sequence rollouts, and simpler memory-update variants would help determine whether similar accuracy can be achieved with lower computational cost.
 
-    Finally, the model should be evaluated on sequences where memory is expected to matter:
-    long occlusions, viewpoint changes, and gradual appearance changes. If memory helps only
-    on a subset of videos, attribute-level analysis may reveal benefits that average metrics
-    hide.
 
     \chapter*{Conclusion}
     \addcontentsline{toc}{chapter}{Conclusion}
@@ -1275,73 +1255,73 @@
     \addcontentsline{toc}{chapter}{References}
     \begin{thebibliography}{99}
 
-    \bibitem{comaniciu2000mean} D. Comaniciu, V. Ramesh, and P. Meer, `Real-Time Tracking of Non-Rigid Objects
-    Using Mean Shift,' CVPR, 2000.
+        \bibitem{comaniciu2000mean} D. Comaniciu, V. Ramesh, and P. Meer, `Real-Time Tracking of Non-Rigid Objects
+        Using Mean Shift,' CVPR, 2000.
 
-    \bibitem{lucas1981iterative} B. D. Lucas and T. Kanade, `An Iterative Image Registration Technique with an
-    Application to Stereo Vision,' IJCAI, 1981.
+        \bibitem{lucas1981iterative} B. D. Lucas and T. Kanade, `An Iterative Image Registration Technique with an
+        Application to Stereo Vision,' IJCAI, 1981.
 
-    \bibitem{isard1998condensation} M. Isard and A. Blake, `CONDENSATION - Conditional Density Propagation for Visual
-    Tracking,' International Journal of Computer Vision, 1998.
+        \bibitem{isard1998condensation} M. Isard and A. Blake, `CONDENSATION - Conditional Density Propagation for Visual
+        Tracking,' International Journal of Computer Vision, 1998.
 
-    \bibitem{matthews2004template} I. Matthews, T. Ishikawa, and S. Baker, `The Template Update Problem,' IEEE
-    Transactions on Pattern Analysis and Machine Intelligence, 2004.
+        \bibitem{matthews2004template} I. Matthews, T. Ishikawa, and S. Baker, `The Template Update Problem,' IEEE
+        Transactions on Pattern Analysis and Machine Intelligence, 2004.
 
-    \bibitem{bolme2010mosse} D. S. Bolme, J. R. Beveridge, B. A. Draper, and Y. M. Lui, `Visual Object Tracking
-    using Adaptive Correlation Filters,' CVPR, 2010.
+        \bibitem{bolme2010mosse} D. S. Bolme, J. R. Beveridge, B. A. Draper, and Y. M. Lui, `Visual Object Tracking
+        using Adaptive Correlation Filters,' CVPR, 2010.
 
-    \bibitem{henriques2012csk} J. F. Henriques, R. Caseiro, P. Martins, and J. Batista, `Exploiting the Circulant
-    Structure of Tracking-by-Detection with Kernels,' ECCV, 2012.
+        \bibitem{henriques2012csk} J. F. Henriques, R. Caseiro, P. Martins, and J. Batista, `Exploiting the Circulant
+        Structure of Tracking-by-Detection with Kernels,' ECCV, 2012.
 
-    \bibitem{henriques2015kcf} J. F. Henriques, R. Caseiro, P. Martins, and J. Batista, `High-Speed Tracking with
-    Kernelized Correlation Filters,' IEEE Transactions on Pattern Analysis and Machine
-    Intelligence, 2015.
+        \bibitem{henriques2015kcf} J. F. Henriques, R. Caseiro, P. Martins, and J. Batista, `High-Speed Tracking with
+        Kernelized Correlation Filters,' IEEE Transactions on Pattern Analysis and Machine
+        Intelligence, 2015.
 
-    \bibitem{danelljan2014dsst} M. Danelljan, G. Hager, F. Shahbaz Khan, and M. Felsberg, `Accurate Scale
-    Estimation for Robust Visual Tracking,' BMVC, 2014.
+        \bibitem{danelljan2014dsst} M. Danelljan, G. Hager, F. Shahbaz Khan, and M. Felsberg, `Accurate Scale
+        Estimation for Robust Visual Tracking,' BMVC, 2014.
 
-    \bibitem{danelljan2017eco} M. Danelljan, G. Bhat, F. Shahbaz Khan, and M. Felsberg, `ECO: Efficient
-    Convolution Operators for Tracking,' CVPR, 2017.
+        \bibitem{danelljan2017eco} M. Danelljan, G. Bhat, F. Shahbaz Khan, and M. Felsberg, `ECO: Efficient
+        Convolution Operators for Tracking,' CVPR, 2017.
 
-    \bibitem{bertinetto2016siamfc} L. Bertinetto, J. Valmadre, J. F. Henriques, A. Vedaldi, and P. H. S. Torr,
-    `Fully-Convolutional Siamese Networks for Object Tracking,' ECCV Workshops, 2016.
+        \bibitem{bertinetto2016siamfc} L. Bertinetto, J. Valmadre, J. F. Henriques, A. Vedaldi, and P. H. S. Torr,
+        `Fully-Convolutional Siamese Networks for Object Tracking,' ECCV Workshops, 2016.
 
-    \bibitem{li2018siamrpn} B. Li, J. Yan, W. Wu, Z. Zhu, and X. Hu, `High Performance Visual Tracking with
-    Siamese Region Proposal Network,' CVPR, 2018.
+        \bibitem{li2018siamrpn} B. Li, J. Yan, W. Wu, Z. Zhu, and X. Hu, `High Performance Visual Tracking with
+        Siamese Region Proposal Network,' CVPR, 2018.
 
-    \bibitem{yan2021stark} B. Yan, H. Peng, J. Fu, D. Wang, and H. Lu, `Learning Spatio-Temporal Transformer
-    for Visual Tracking,' ICCV, 2021.
+        \bibitem{yan2021stark} B. Yan, H. Peng, J. Fu, D. Wang, and H. Lu, `Learning Spatio-Temporal Transformer
+        for Visual Tracking,' ICCV, 2021.
 
-    \bibitem{ye2022ostrack} B. Ye, H. Chang, B. Ma, S. Shan, and X. Chen, `Joint Feature Learning and
-    Relation Modeling for Tracking: A One-Stream Framework,' ECCV, 2022.
+        \bibitem{ye2022ostrack} B. Ye, H. Chang, B. Ma, S. Shan, and X. Chen, `Joint Feature Learning and
+        Relation Modeling for Tracking: A One-Stream Framework,' ECCV, 2022.
 
-    \bibitem{borsuk2022fear} V. Borsuk, R. Vei, O. Kupyn, T. Martyniuk, I. Krashenyi, and J. Matas, `FEAR:
-    Fast, Efficient, Accurate and Robust Visual Tracker,' ECCV, 2022.
+        \bibitem{borsuk2022fear} V. Borsuk, R. Vei, O. Kupyn, T. Martyniuk, I. Krashenyi, and J. Matas, `FEAR:
+        Fast, Efficient, Accurate and Robust Visual Tracker,' ECCV, 2022.
 
-    \bibitem{bhat2019dimp} G. Bhat, M. Danelljan, L. Van Gool, and R. Timofte, `Learning Discriminative
-    Model Prediction for Tracking,' ICCV, 2019.
+        \bibitem{bhat2019dimp} G. Bhat, M. Danelljan, L. Van Gool, and R. Timofte, `Learning Discriminative
+        Model Prediction for Tracking,' ICCV, 2019.
 
-    \bibitem{shi1994good} J. Shi and C. Tomasi, ``Good Features to Track,'' Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition, pp. 593--600, 1994.
+        \bibitem{shi1994good} J. Shi and C. Tomasi, ``Good Features to Track,'' Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition, pp. 593--600, 1994.
 
-    \bibitem{huang2021got10k} L. Huang, X. Zhao, and K. Huang, `GOT-10k: A Large High-Diversity Benchmark for
-    Generic Object Tracking in the Wild,' IEEE Transactions on Pattern Analysis and Machine
-    Intelligence, 2021.
+        \bibitem{huang2021got10k} L. Huang, X. Zhao, and K. Huang, `GOT-10k: A Large High-Diversity Benchmark for
+        Generic Object Tracking in the Wild,' IEEE Transactions on Pattern Analysis and Machine
+        Intelligence, 2021.
 
-    \bibitem{vaswani2017attention} A. Vaswani et al., `Attention Is All You Need,' NeurIPS, 2017.
+        \bibitem{vaswani2017attention} A. Vaswani et al., `Attention Is All You Need,' NeurIPS, 2017.
 
-    \bibitem{dosovitskiy2021vit} A. Dosovitskiy et al., `An Image is Worth 16x16 Words: Transformers for Image
-    Recognition at Scale,' ICLR, 2021.
+        \bibitem{dosovitskiy2021vit} A. Dosovitskiy et al., `An Image is Worth 16x16 Words: Transformers for Image
+        Recognition at Scale,' ICLR, 2021.
 
-    \bibitem{cho2014gru} K. Cho et al., `Learning Phrase Representations using RNN Encoder-Decoder for
-    Statistical Machine Translation,' EMNLP, 2014.
+        \bibitem{cho2014gru} K. Cho et al., `Learning Phrase Representations using RNN Encoder-Decoder for
+        Statistical Machine Translation,' EMNLP, 2014.
 
-    \bibitem{he2022mae} K. He, X. Chen, S. Xie, Y. Li, P. Dollar, and R. Girshick, `Masked Autoencoders
-    Are Scalable Vision Learners,' CVPR, 2022.
+        \bibitem{he2022mae} K. He, X. Chen, S. Xie, Y. Li, P. Dollar, and R. Girshick, `Masked Autoencoders
+        Are Scalable Vision Learners,' CVPR, 2022.
 
-    \bibitem{zhang2024vitfigure} A. Zhang, Z. C. Lipton, M. Li, and A. J. Smola, `Vision Transformer.svg,'
-    Wikimedia Commons, 2024. Licensed under Creative Commons Attribution-ShareAlike 4.0
-    International (CC BY-SA 4.0). Available:
-    \url{https://commons.wikimedia.org/wiki/File:Vision_Transformer.svg}
+        \bibitem{zhang2024vitfigure} A. Zhang, Z. C. Lipton, M. Li, and A. J. Smola, `Vision Transformer.svg,'
+        Wikimedia Commons, 2024. Licensed under Creative Commons Attribution-ShareAlike 4.0
+        International (CC BY-SA 4.0). Available:
+        \url{https://commons.wikimedia.org/wiki/File:Vision_Transformer.svg}
 
     \end{thebibliography}
 
