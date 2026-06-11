@@ -270,6 +270,7 @@
         =
         \frac{|B_{\text{pred}} \cap B_{\text{gt}}|}
         {|B_{\text{pred}} \cup B_{\text{gt}}|}
+        \label{eq:iou}
     \end{equation}
     \FormulaNotation{
         \item \(B_{\text{pred}}\) is the predicted bounding box;
@@ -295,7 +296,7 @@
         \item \(i\) is the frame index;
         \item \(B^{i}_{\text{pred}}\) is the predicted bounding box for frame \(i\);
         \item \(B^{i}_{\text{gt}}\) is the ground-truth bounding box for frame \(i\);
-        \item \(\operatorname{IoU}(\cdot,\cdot)\) is the intersection-over-union function defined in (1.1).
+        \item \(\operatorname{IoU}(\cdot,\cdot)\) is the intersection-over-union function defined in Equation~\eqref{eq:iou}.
     }
 
     SR0.50 is the proportion of frames whose overlap is at least 0.50, while SR0.75 is the
@@ -492,19 +493,19 @@
     OSTrack chooses candidates using attention between the template and search tokens. After the multi-head attention
     operation in a transformer block, a representative template token is used to score the search tokens. In the standard
     setting, this representative token is the center template token, because the target is normally centered in the template
-    crop. If this token is denoted by \(\phi\) and the transformer has \(M\) attention heads, the score of search token
+    crop. If this token is denoted by \(\phi\) and the transformer has \(H\) attention heads, the score of search token
     \(x\) is computed by averaging attention from \(\phi\) to \(x\) over all heads:
 
     \begin{equation}
-        w_x^{\phi} = \frac{1}{M}\sum_{m=1}^{M} w_x^{\phi}(m).
+        w_x^{\phi} = \frac{1}{H}\sum_{h=1}^{H} w_x^{\phi,h}.
     \end{equation}
     \FormulaNotation{
         \item \(w_x^{\phi}\) is the averaged attention score from the representative template token to search token \(x\);
         \item \(\phi\) is the representative template token;
         \item \(x\) is a search token;
-        \item \(M\) is the number of attention heads;
-        \item \(m\) is the attention-head index;
-        \item \(w_x^{\phi}(m)\) is the attention score from \(\phi\) to \(x\) in head \(m\).
+        \item \(H\) is the number of attention heads;
+        \item \(h\) is the attention-head index;
+        \item \(w_x^{\phi,h}\) is the attention score from \(\phi\) to \(x\) in head \(h\).
     }
 
     Search tokens with the highest scores are kept, while lower-scoring search tokens are
@@ -523,12 +524,12 @@
     The kept search-token indices can be written as:
 
     \begin{equation}
-        I_{\text{keep}} = \operatorname{TopK}(w_x^{\phi}, k).
+        I_{\text{keep}} = \operatorname{TopK}\left(\{w_x^{\phi}\}_{x \in S}, k\right).
     \end{equation}
     \FormulaNotation{
         \item \(I_{\text{keep}}\) is the set of retained search-token indices;
         \item \(\operatorname{TopK}(\cdot,k)\) selects the \(k\) highest-scoring tokens;
-        \item \(w_x^{\phi}\) is the attention-based score used for ranking search tokens.
+        \item \(\{w_x^{\phi}\}_{x \in S}\) is the set of attention-based scores used for ranking search tokens.
     }
 
     The original order and positions of the remaining search tokens are stored. Before the
@@ -633,7 +634,7 @@
     for deciding which template and search tokens should influence the memory representation, however, it does not provide
     a dedicated gate that controls how much of the previous memory should be kept and how much new information should be written.
 
-    Equation~\ref{eq:vit-attention-residual} provides a residual path that can preserve information from the
+    Equation~\eqref{eq:vit-attention-residual} provides a residual path that can preserve information from the
     previous layer:
 
     \begin{equation}
@@ -684,13 +685,13 @@
     \begin{equation}
     [T_{t,l}, S_{t,l}, M'_{t,l}]
         =
-        \mathrm{ViTLayer}_l([T_{t,l-1}, S_{t,l-1}, M_{t,l-1}]).
+        \operatorname{ViTLayer}_l([T_{t,l-1}, S_{t,l-1}, M_{t,l-1}]).
     \end{equation}
     \FormulaNotation{
         \item \(M'_{t,l}\) is the candidate memory representation proposed by the transformer layer;
         \item \(T_{t,l}\) and \(S_{t,l}\) are the template and search tokens after layer \(l\) at frame \(t\);
         \item \(M_{t,l-1}\) is the memory from the previous layer in the current frame;
-        \item \(\mathrm{ViTLayer}_l(\cdot)\) denotes transformer layer \(l\).
+        \item \(\operatorname{ViTLayer}_l(\cdot)\) denotes transformer layer \(l\).
     }
 
     The value \(M'_{t,l}\) is the memory suggested by attention at the current frame and layer. It is not accepted directly.
@@ -698,11 +699,11 @@
     previous frame at the same layer, creating an explicit temporal skip connection:
 
     \begin{equation}
-        \tilde{M}_{t,l} = \mathrm{GRU}_1(M'_{t,l}, M_{t-1,l}).
+        \tilde{M}_{t,l} = \operatorname{GRU}_1(M'_{t,l}, M_{t-1,l}).
     \end{equation}
     \FormulaNotation{
         \item \(\tilde{M}_{t,l}\) is the intermediate memory after temporal fusion;
-        \item \(\mathrm{GRU}_1(\cdot,\cdot)\) is the first GRU update, applied independently to each memory token;
+        \item \(\operatorname{GRU}_1(\cdot,\cdot)\) is the first GRU update, applied independently to each memory token;
         \item \(M'_{t,l}\) is the current candidate memory and is used as the GRU input;
         \item \(M_{t-1,l}\) is the memory from the previous frame at the same layer and is used as the previous hidden state.
     }
@@ -711,11 +712,11 @@
     layer in the current frame:
 
     \begin{equation}
-        M_{t,l} = \mathrm{GRU}_2(\tilde{M}_{t,l}, M_{t,l-1}).
+        M_{t,l} = \operatorname{GRU}_2(\tilde{M}_{t,l}, M_{t,l-1}).
     \end{equation}
     \FormulaNotation{
         \item \(M_{t,l}\) is the final memory output at frame \(t\) and layer \(l\);
-        \item \(\mathrm{GRU}_2(\cdot,\cdot)\) is the second GRU update, applied independently to each memory token;
+        \item \(\operatorname{GRU}_2(\cdot,\cdot)\) is the second GRU update, applied independently to each memory token;
         \item \(\tilde{M}_{t,l}\) is the intermediate memory after temporal fusion and is used as the GRU input;
         \item \(M_{t,l-1}\) is the memory from the previous layer in the current frame and is used as the previous hidden state.
     }
@@ -803,12 +804,12 @@
     In standard ground-truth-centered training, the search crop is generated using the ground-truth box of the current frame:
 
     \begin{equation}
-        S_t = \operatorname{crop}(I_t, B^{gt}_t).
+        S_t = \operatorname{crop}(I_t, B^{\mathrm{gt}}_t).
     \end{equation}
     \FormulaNotation{
         \item \(S_t\) is the search crop at time \(t\);
         \item \(I_t\) is the full image at time \(t\);
-        \item \(B^{gt}_t\) is the ground-truth target box at time \(t\).
+        \item \(B^{\mathrm{gt}}_t\) is the ground-truth target box at time \(t\).
     }
 
     To simulate imperfect localization, standard training applies artificial random jitter to this ground-truth box. However, even with this jitter, the inputs remain fundamentally disconnected from the model's actual performance. Because every crop is anchored to the true target location, the model never experiences the compounding prediction errors that occur during real tracking.
@@ -907,7 +908,7 @@
             L_t &= \frac{1}{|\mathcal{S}_t|}
             \sum_{j \in \mathcal{S}_t}
             \lVert x_j * f_t - y_j \rVert_2^2
-            + \lambda \lVert f_t \rVert_2^2.
+            + \lambda_{\mathrm{reg}} \lVert f_t \rVert_2^2.
         \end{aligned}
     \end{equation}
     \FormulaNotationWith{Here:}{
@@ -918,7 +919,7 @@
         \item \(x_j\) is the search-region feature map for frame \(j\);
         \item \(f_t\) is the memory filter predicted at frame \(t\);
         \item \(y_j\) is the ground-truth Gaussian target heatmap for frame \(j\);
-        \item \(\lambda\) is a hyperparameter controlling the strength of the weight regularization.
+        \item \(\lambda_{\mathrm{reg}}\) is a hyperparameter controlling the strength of the weight regularization.
     }
     The total auxiliary loss is the average of \(L_t\) across all frames in the sequence that
     produce a memory filter.
@@ -935,7 +936,7 @@
     the memory state must generate a filter that yields a high response at the target location and a low response on the
     background, even when applied to frames from different temporal steps.
 
-    However, this approach presents two significant limitations. First, because the supervision relies on a randomly sampled subset of frames (\(\mathcal{S}_t\)), the training signal can exhibit high variance and noise. Second, the computational complexity scales poorly. Evaluating every predicted filter against every other frame in a sequence of length \(T\) requires \(O(T^2)\) cross-correlation operations. While random sampling reduces this to \(O(T \cdot |\mathcal{S}_t|)\), it remains computationally heavy. These limitations motivated the development of a more efficient, sequence-level approach, detailed in the following section.
+    However, this approach presents two significant limitations. First, because the supervision relies on a randomly sampled subset of frames (\(\mathcal{S}_t\)), the training signal can exhibit high variance and noise. Second, the computational complexity scales poorly. Evaluating every predicted filter against every other frame in a sequence of length \(K\) requires \(O(K^2)\) cross-correlation operations. While random sampling reduces this to \(O(K \cdot |\mathcal{S}_t|)\), it remains computationally heavy. These limitations motivated the development of a more efficient, sequence-level approach, detailed in the following section.
 
 
     \section{DiMP Target-Match Loss}\label{dimp-target-match-loss}
@@ -955,24 +956,35 @@
     head, but to provide direct supervision that encourages the added memory tokens to encode information useful for target
     discrimination.
 
-    To construct the pseudo-label, the method first collects all available detached search features, \(x_1, \dots, x_T\), and
-    their corresponding ground-truth heatmaps, \(y_1, \dots, y_T\). An initial filter is formed by taking the mean of the
-    detached memory filters predicted by the auxiliary memory head across the sequence. A sequence-level target
-    filter, \(f^*\), is then fitted by minimizing the following least-squares objective:
+
+    To construct the pseudo-label, the method first collects all available detached search features,
+    \(x_1, \dots, x_K\), and their corresponding ground-truth heatmaps, \(y_1, \dots, y_K\). An initial
+    filter is formed by taking the mean of the detached memory filters predicted by the auxiliary
+    memory head across the sequence. A sequence-level target filter, \(f^*\), is then fitted by
+    minimizing the following least-squares objective:
 
     \begin{equation}
         \begin{aligned}
-            L(f) &= \operatorname{mean}\left(\lVert x * f - y \rVert_2^2\right)
-            + \lambda \operatorname{mean}\left(\lVert f \rVert_2^2\right).
+             L(f) &=
+            \operatorname{mean}_{j}\left(
+            \lVert x_j * f - y_j \rVert_2^2
+            \right)
+            +
+            \lambda_{\mathrm{reg}}
+            \operatorname{mean}\left(
+            \lVert f \rVert_2^2
+            \right).
         \end{aligned}
     \end{equation}
     \FormulaNotationWith{Here:}{
         \item \(L(f)\) is the least-squares objective for fitting a target filter;
         \item \(f\) is the candidate discriminative filter being optimized;
-        \item \(x\) denotes the collected detached search features;
-        \item \(y\) denotes the corresponding ground-truth heatmaps;
-        \item \(\lambda\) is the regularization strength;
-        \item \(\operatorname{mean}(\cdot)\) denotes averaging over the evaluated samples and spatial locations;
+        \item \(x_j\) is the detached search feature map for frame \(j\);
+        \item \(y_j\) is the corresponding ground-truth heatmap;
+        \item \(*\) denotes cross-correlation;
+        \item \(\lambda_{\mathrm{reg}}\) is the regularization strength;
+        \item \(\operatorname{mean}_{j}(\cdot)\) denotes averaging over the evaluated frames;
+        \item \(\operatorname{mean}(\cdot)\) denotes averaging over the remaining batch, spatial, or filter dimensions;
         \item \(f^*\) is the filter that best matches the whole training sequence under this least-squares objective.
     }
     The implementation
@@ -982,12 +994,19 @@
     auxiliary loss is the mean squared difference between each predicted filter and the optimized target filter:
 
     \begin{equation}
-        L_{\text{match}} = w_{\text{match}} \frac{1}{M} \sum_i \lVert f_i - f^* \rVert_2^2.
+        L_{\mathrm{match}}
+        =
+        w_{\mathrm{match}}
+        \frac{1}{K}
+        \sum_{i=1}^{K}
+        \operatorname{mean}\left(
+        \lVert f_i - f^* \rVert_2^2
+        \right).
     \end{equation}
     \FormulaNotation{
-        \item \(L_{\text{match}}\) is the target-match auxiliary loss;
-        \item \(w_{\text{match}}\) is \texttt{FILTER\_MATCH\_WEIGHT};
-        \item \(M\) is the number of predicted memory filters;
+        \item \(L_{\mathrm{match}}\) is the target-match auxiliary loss;
+        \item \(w_{\mathrm{match}}\) is \texttt{FILTER\_MATCH\_WEIGHT};
+        \item \(K\) is the number of predicted memory filters;
         \item \(i\) indexes the predicted memory filters;
         \item \(f_i\) is the predicted memory filter from frame \(i\);
         \item \(f^*\) is the optimized sequence-level target filter.
