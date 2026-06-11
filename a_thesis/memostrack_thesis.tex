@@ -775,31 +775,6 @@
     This design was introduced in the later stage of development. The GRU update makes the memory stream explicitly recurrent and gives
     the model a learned mechanism for balancing preservation and adaptation.
 
-    A related alternative considered during development was a three-way gated
-    update. In that design, the final memory would be a weighted combination of the
-    three available memory sources:
-
-    \begin{equation}
-        M_{t,l} = \alpha_1 M'_{t,l}
-        + \alpha_2 M_{t-1,l}
-        + \alpha_3 M_{t,l-1},
-        \quad
-        \alpha_1 + \alpha_2 + \alpha_3 = 1.
-    \end{equation}
-    \FormulaNotation{
-        \item \(M_{t,l}\) is the resulting memory at frame \(t\) and layer \(l\);
-        \item \(M'_{t,l}\), \(M_{t-1,l}\), and \(M_{t,l-1}\) are the candidate, previous-frame, and previous-layer memory sources;
-        \item \(\alpha_1\), \(\alpha_2\), and \(\alpha_3\) are learned mixture weights;
-        \item \(\alpha_1 + \alpha_2 + \alpha_3 = 1\) constrains the weights to sum to one.
-    }
-
-    Such a softmax-style gate would make the three-source structure explicit. The
-    implemented version instead uses two sequential GRU updates. The GRU version is
-    more recurrent in form and uses learned gates inside each update. The three-way
-    gated update remains a useful future architecture to explore because it would treat all three memory
-    sources symmetrically.
-
-
     \chapter{Sequence-Based and Inference-Like Training}\label{sequence-based-and-inference-like-training}
 
 
