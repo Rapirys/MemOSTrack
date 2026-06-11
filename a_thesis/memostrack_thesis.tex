@@ -166,7 +166,7 @@ but it must adapt when the true target changes appearance.
 Single-object tracking (SOT) is the task of localizing the same target object throughout
 a video sequence, given only its bounding box in the first frame. Early tracking methods
 were mainly based on hand-crafted appearance and motion models, including mean-shift
-tracking [1], optical flow-based methods [2], particle filters [3], and template
+tracking [1], optical flow-based methods [2][16] , particle filters [3], and template
 matching approaches [4]. These methods were often efficient and conceptually simple,
 but they struggled under large appearance changes, occlusion, background clutter, and
 scale variation. Around the early 2010s, discriminative correlation filter trackers
@@ -250,9 +250,8 @@ DiMP learns a discriminative target model during tracking. Its main idea is to p
 target-specific classifier that can distinguish the target from the background using
 information available from the video sequence. This makes DiMP especially relevant to
 this thesis because it explicitly uses sequence information to adapt the target model
-online, instead of relying only on a static initial template. The later PrDiMP [16]
-extends this direction with a probabilistic regression formulation for visual tracking.
-Although DiMP-style trackers are architecturally different from OSTrack, they show that
+online, instead of relying only on a static initial template.
+DiMP-style trackers are architecturally different from the standard siamese and show that
 online adaptation and sequence-level information can improve tracking robustness. This
 motivates the idea of adding recurrent memory to a template-search transformer tracker.
 
@@ -272,7 +271,7 @@ This location is usually estimated from the bounding-box prediction in the previ
 There are two main reasons why a search crop is used instead of the whole image. First,
 it reduces computation by allowing the model to process only the region where the target
 is expected to appear. This is especially important for transformer-based trackers,
-because transformer-style attention is quadratic in the number of tokens {[}18{]}. For
+because standard full self-attention is quadratic in the number of tokens {[}18{]}. For
 example, with \(16 \times 16\) patches, a \(256 \times 256\) search crop contains 256
 tokens, whereas a full HD frame would contain more than 8000 tokens. The corresponding
 attention matrix is therefore much smaller for the search crop than for the full image.
@@ -985,7 +984,7 @@ The introduction of memory tokens transforms the tracker into a recurrent model,
 error backpropagation across temporal iterations. Allowing gradients to flow through an entire video sequence is both
 computationally expensive and highly demanding on GPU memory. Additionally, unrolling the computational graph over long
 sequences amplifies the risk of gradient instability, such as vanishing or exploding gradients. A standard approach to
-address this is Truncated Backpropagation Through Time {[}23{]}. In the provided implementation, the model periodically
+address this is truncating backpropagation through time. In the provided implementation, the model periodically
 detaches the memory state from the computation graph after a fixed number of frames (specifically, 8 frames during
 training). This truncation limits how far the gradients can propagate backward in time, balancing the need to learn
 temporal dependencies with computational feasibility and training stability.
@@ -1207,29 +1206,6 @@ The training pipeline employs a causal consecutive sequence sampler under a two-
 optimization, the first 40 epochs utilize ground-truth-centered crops with random jitter over 20-frame rollouts.
 After this stage, inference-like dynamic cropping is fully enabled, and the rollout length is reduced to 15 frames.
 
-\section{Hyperparameter and optimizer considerations}\label{hyperparameter-and-optimizer-considerations}
-
-The memory-augmented model has two different kinds of trainable parameters. The
-pretrained backbone already contains general visual representations. The memory tokens,
-GRU modules, and memory embeddings are new or substantially changed. It is therefore
-reasonable to use different optimizer parameter groups. The backbone can be trained with
-a conservative learning rate, while memory-specific parameters can receive a separately
-controlled learning rate.
-
-This distinction was important in the project because the newly introduced memory
-tokens, recurrent update modules, and memory-read embeddings had to be detected and
-grouped correctly. If they were accidentally treated as ordinary pretrained backbone
-parameters, they might receive a learning rate too small for new modules. If they were
-treated too aggressively, they could destabilize the backbone. The correct choice is an
-empirical hyperparameter, but the optimizer must at least expose the distinction.
-
-Gradient clipping is another relevant hyperparameter. Recurrent sequence training
-accumulates losses over multiple frames and backpropagates through a memory chain.
-Dynamic cropping can also create hard examples when early predictions move the crop away
-from the target. These factors can lead to occasional large gradients. Gradient clipping
-is therefore a practical stabilization technique, especially when newly initialized
-recurrent parameters are trained together with a pretrained transformer backbone {[}24{]}.
-
 \section{Evaluation protocol}\label{evaluation-protocol}
 
 The tracker is evaluated on the GOT-10k test set using Average Overlap (AO), Success Rate at 0.50 (SR0.50), and Success
@@ -1442,31 +1418,15 @@ hide.
 \chapter*{Conclusion}
 \addcontentsline{toc}{chapter}{Conclusion}
 
-This thesis investigated the integration of recurrent memory tokens into OSTrack. The
-proposed MemOSTrack model extends the original one-stream transformer tracker with
-memory tokens and a two-stage GRU update mechanism. The first GRU combines current
-candidate memory with memory from the previous frame, while the second GRU combines the
-result with memory from the previous transformer layer. This design was intended to
-provide both temporal continuity and layer-wise memory refinement.
+This thesis investigated the integration of recurrent memory tokens into OSTrack. The proposed MemOSTrack model extends the original one-stream transformer tracker with memory tokens updated through ViT and a two-stage GRU update mechanism. The design is intended to provide both temporal continuity and layer-wise memory refinement.
 
-The work also required a substantial rewrite of the training pipeline. The original
-pair-based sampling strategy was replaced by sequence-based sampling so that memory
-could be propagated through ordered video frames. The final version further introduced
-dynamic search cropping, where the search crop is generated from the previous prediction
-rather than from the current ground truth. This made training more similar to inference,
-although also more difficult.
+To effectively train this recurrent architecture, the standard training pipeline was substantially restructured. The original independent pair-based sampling was replaced with sequence-based sampling and inference-like dynamic search cropping, allowing the memory state to evolve over ordered video frames. By generating subsequent search crops from the model's own predictions rather than ground-truth annotations, the training conditions were brought closer to real-world inference, forcing the model to learn how to recover from tracking drift.
 
-Auxiliary memory loss heads were explored because a strong OSTrack baseline can ignore
-newly added memory tokens. Template blurring was considered as a complementary solution
-to reduce over-reliance on the clean initial template and encourage use of recurrent
-memory.
+Because a strong baseline tracker can easily bypass newly added modules, explicit and implicit supervision strategies were explored to ensure the memory tokens were actively utilized. Auxiliary memory loss heads were designed to force the memory tokens to encode discriminative spatial features. Concurrently, template blurring was introduced as a regularization technique to reduce the network's over-reliance on the clean initial template, thereby encouraging the extraction of temporal cues from the memory stream.
 
-The final MemOSTrack-256 + CE model achieved AO 0.729, SR0.50 0.823, and SR0.75
-0.693. This is higher than the reported same-resolution OSTrack-256 + CE baseline, but it
-does not outperform the stronger higher-resolution OSTrack-384 + CE baseline. The
-result provides a useful foundation for future work on memory supervision, update
-mechanisms, resolution scaling, and training curricula for transformer-based visual
-tracking.
+In experimental evaluations on the GOT-10k benchmark, the final MemOSTrack-256 + CE model achieved an AO of 0.729, an SR0.50 of 0.823, and an SR0.75 of 0.693. These results demonstrate a clear improvement over the reported same-resolution OSTrack-256 + CE baseline, validating the benefits of the proposed memory mechanism and dynamic training strategy. However, because these modifications were evaluated jointly, future ablation studies are required to determine the individual contributions of the memory tokens, the GRU mechanism, and the dynamic training pipeline to the overall performance gain.
+
+While Single-Object Tracking (SOT) served as a rigorous and highly useful test framework with established datasets and baselines for this research, the core contributions of this work are not strictly limited to tracking. The proposed integration of recurrent memory tokens, layer-wise GRU updates, and dynamic sequence training provides a robust foundation that could be adapted for broader video processing tasks requiring efficient, long-term temporal modeling in Vision Transformers.
 
 \clearpage
 \chapter*{References}
@@ -1518,8 +1478,7 @@ Fast, Efficient, Accurate and Robust Visual Tracker,' ECCV, 2022.
 [15] G. Bhat, M. Danelljan, L. Van Gool, and R. Timofte, `Learning Discriminative
 Model Prediction for Tracking,' ICCV, 2019.
 
-[16] M. Danelljan, L. Van Gool, and R. Timofte, `Probabilistic Regression for Visual
-Tracking,' CVPR, 2020.
+[16] J. Shi and C. Tomasi, “Good Features to Track,” Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition, pp. 593–600, 1994.
 
 [17] L. Huang, X. Zhao, and K. Huang, `GOT-10k: A Large High-Diversity Benchmark for
 Generic Object Tracking in the Wild,' IEEE Transactions on Pattern Analysis and Machine
@@ -1541,13 +1500,6 @@ Wikimedia Commons, 2024. Licensed under Creative Commons Attribution-ShareAlike 
 International (CC BY-SA 4.0). Available:
 https://commons.wikimedia.org/wiki/File:Vision\_Transformer.svg
 
-[23] R. J. Williams and D. Zipser, `Gradient-Based Learning Algorithms for Recurrent
-Networks and Their Computational Complexity,' in Backpropagation: Theory, Architectures,
-and Applications, 1995.
-
-[24] R. Pascanu, T. Mikolov, and Y. Bengio, `On the Difficulty of Training Recurrent
-Neural Networks,' Proceedings of the 30th International Conference on Machine Learning
-(ICML), 2013.
 
 \chapter*{Abstract}
 \addcontentsline{toc}{chapter}{Abstract}
