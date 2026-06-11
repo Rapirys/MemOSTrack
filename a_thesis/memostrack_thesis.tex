@@ -657,36 +657,11 @@
     between the memory representations of the same layer across time. However, in the direct-update design, recurrence is
     present only in the form of a feedback loop, where the last layer of the current frame is connected to the first layer
     of the next frame. This means that when unrolling the memory tokens over \(T\) frames through an \(L\)-layer backbone, the
-    gradient has to travel through all layers of the backbone for each frame:
+    gradient has to travel through all layers of the backbone for each frame.
 
-    \begin{equation}
-        \frac{\partial L_T}{\partial M_1}
-        \supset
-        \frac{\partial L_T}{\partial M_T}
-        \prod_{t=2}^{T}
-        \prod_{l=1}^{L}
-        \frac{\partial M_{t,l}}{\partial M_{t,l-1}} .
-    \end{equation}
-    \FormulaNotationWith{Here:}{
-        \item \(L_T\) is the loss at frame \(T\);
-        \item \(M_1\) and \(M_T\) are the memory states at the first and last frames;
-        \item \(t\) is the frame index;
-        \item \(l\) is the transformer layer index;
-        \item \(L\) is the number of transformer layers;
-        \item \(\frac{\partial M_{t,l}}{\partial M_{t,l-1}}\) represents the local Jacobian matrix at layer \(l\) of frame \(t\);
-        \item \(\supset\) indicates that the expression shows one component of the full gradient path.
-    }
-    This expression isolates the recurrent memory path; the full training gradient also contains paths through search
-    tokens,
-    template tokens, the prediction head, and the backbone parameters.
+    Consequently, computing how the initial memory state affects the final frame's loss involves a continuous chain of multiplications of the local gradients  across every layer of every frame in the sequence. While this continuous chain isolates the recurrent memory path, the full training gradient also contains paths through search tokens, template tokens, the prediction head, and the backbone parameters.
 
-    Because the search and template tokens do not propagate their hidden states across frames,
-    the recurrent temporal path is carried by the memory tokens, represented here by
-    \(\frac{\partial M_{t,l}}{\partial M_{t,l-1}}\).
-    Suppose we have a 12-layer transformer backbone over a 20-frame sequence;
-    this chain expands to 240 sequential Jacobian matrix multiplications. This deep computational graph can contribute to
-    error accumulation, causing gradient vanishing or explosion. One way to
-    address this issue is to add explicit temporal skip connections.
+    Suppose we have a 12-layer transformer backbone over a 20-frame sequence; this chain expands to 240 sequential matrix multiplications. This deep computational graph can contribute to error accumulation, causing gradient vanishing or explosion. One way to address this issue is to add explicit temporal skip connections.
 
     To address both memory drift and gradient instability, a more intentional architectural design is required.
     Specifically, the architecture must decouple the \emph{proposal} of new memory from the actual \emph{update} of the memory state,
