@@ -75,12 +75,11 @@
 \mjestoEN{Zagreb}
 \mjestoHR{Zagreb}
 \brojrada{}
-\mentor{Krešimir Krežantović}
+\mentor{Krešimir Križanović}
 \PDFTitle{Extending OSTrack with GRU-Based Memory Tokens for Visual Object Tracking}
 \PDFAuthor{Illia Rotan}
 
 \begin{document}
-    \maketitle
     \frontmatter
     \tableofcontents
     \mainmatter
@@ -414,7 +413,7 @@
     }
 
     A standard ViT encoder layer applies a pre-normalized multi-head self-attention block followed by a pre-normalized per-token MLP
-    block, with residual connections after both. In the candidate elemination (CE) enabled OSTrack backbone, candidate elimination is inserted
+    block, with residual connections after both. In the candidate elimination (CE) enabled OSTrack backbone, candidate elimination is inserted
     between the attention block and the MLP block. This gives the following \(\operatorname{ViTBackbone}\) layer update:
 
     \begin{align}
@@ -1201,7 +1200,7 @@
     independently. This would make it possible to understand which parts of the pipeline are
     most important and which parts mainly add complexity.
 
-    Additioonaly, Future work should also analyze the computational trade-off introduced by the memory mechanism. Since memory tokens and GRU updates increase the amount of computation compared with the original OSTrack-256 + CE baseline. Testing different numbers of memory tokens, shorter and longer sequence rollouts, and simpler memory-update variants would help
+    Additionally, future work should also analyze the computational trade-off introduced by the memory mechanism. Since memory tokens and GRU updates increase the amount of computation compared with the original OSTrack-256 + CE baseline. Testing different numbers of memory tokens, shorter and longer sequence rollouts, and simpler memory-update variants would help
     determine whether similar accuracy can be achieved with lower computational cost.
 
 
@@ -1313,24 +1312,6 @@
         \url{https://commons.wikimedia.org/wiki/File:Vision_Transformer.svg}
 
     \end{thebibliography}
-
-    \chapter*{Abstract}
-    \addcontentsline{toc}{chapter}{Abstract}
-
-    \section*{Extending OSTrack with GRU-Based Memory Tokens for Visual Object Tracking}
-
-    This thesis investigates the integration of recurrent memory tokens into OSTrack, a
-    one-stream transformer tracker. The proposed MemOSTrack model adds memory tokens to
-    the template-search token sequence and updates them with a two-stage GRU mechanism using
-    previous-frame and previous-layer memory. The training pipeline was rewritten from
-    pair-based sampling to ordered video sequence sampling and further extended with dynamic
-    search cropping to better match inference. Auxiliary memory loss heads and template
-    blurring were explored to encourage the model to use memory. The final model achieved AO
-    0.729, SR0.50 0.823, and SR0.75 0.693. It was higher than the reported same-resolution
-    OSTrack-256 + CE baseline, but remained slightly below the stronger reported OSTrack-384 + CE baseline.
-
-    Keywords: visual object tracking, OSTrack, transformer, GRU, memory tokens, dynamic
-    cropping
 
     \chapter*{Summary}
     \addcontentsline{toc}{chapter}{Summary}
