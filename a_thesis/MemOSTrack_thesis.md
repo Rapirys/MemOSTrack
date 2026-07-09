@@ -627,7 +627,7 @@ them as either removable candidates or
 scoring tokens, so memory tokens can influence it only indirectly through their
 participation in transformer attention.
 
-![Direct transformer-based memory update.](memostrack_backbone_layers_no-gru.png)
+![Direct transformer-based memory update.](sources/memostrack_backbone_layers_no-gru.png)
 
 *Figure 3.1 - Direct transformer-based memory update. The template and search images are
 first converted into visual tokens by tokenization and linear projection. A learned
