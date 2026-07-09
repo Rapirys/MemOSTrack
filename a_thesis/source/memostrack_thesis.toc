@@ -1,0 +1,40 @@
+\babel@toc {english}{}\relax 
+\contentsline {chapter}{Introduction}{1}{chapter*.2}%
+\contentsline {chapter}{\numberline {1}Background and Related Work}{3}{chapter.1}%
+\contentsline {section}{\numberline {1.1}Single-object tracking}{3}{section.1.1}%
+\contentsline {section}{\numberline {1.2}From Siamese trackers to transformer trackers}{5}{section.1.2}%
+\contentsline {section}{\numberline {1.3}Template and Search Crop Notation}{6}{section.1.3}%
+\contentsline {section}{\numberline {1.4}Evaluation metrics and common benchmarks}{7}{section.1.4}%
+\contentsline {section}{\numberline {1.5}Motivation for temporal memory}{9}{section.1.5}%
+\contentsline {chapter}{\numberline {2}OSTrack Baseline}{11}{chapter.2}%
+\contentsline {section}{\numberline {2.1}OSTrack Tracker}{11}{section.2.1}%
+\contentsline {section}{\numberline {2.2}ViT Backbone}{12}{section.2.2}%
+\contentsline {section}{\numberline {2.3}Candidate elimination}{14}{section.2.3}%
+\contentsline {chapter}{\numberline {3}Proposed Memory-Augmented OSTrack}{17}{chapter.3}%
+\contentsline {section}{\numberline {3.1}Memory-token design motivation}{17}{section.3.1}%
+\contentsline {section}{\numberline {3.2}Direct transformer-based memory update}{17}{section.3.2}%
+\contentsline {section}{\numberline {3.3}Limitations of direct memory update}{20}{section.3.3}%
+\contentsline {section}{\numberline {3.4}Two-way GRU. GRU-based memory update}{21}{section.3.4}%
+\contentsline {chapter}{\numberline {4}Sequence-Based and Inference-Like Training}{24}{chapter.4}%
+\contentsline {section}{\numberline {4.1}Sequence-based training for recurrent memory}{24}{section.4.1}%
+\contentsline {section}{\numberline {4.2}Dynamic inference-like search cropping}{25}{section.4.2}%
+\contentsline {section}{\numberline {4.3}Truncated Backpropagation Through Time in the training loop}{27}{section.4.3}%
+\contentsline {chapter}{\numberline {5}Auxiliary Memory Supervision}{28}{chapter.5}%
+\contentsline {section}{\numberline {5.1}Auxiliary Loss Concept}{28}{section.5.1}%
+\contentsline {section}{\numberline {5.2}Sampled Discriminative Filter Loss}{28}{section.5.2}%
+\contentsline {section}{\numberline {5.3}DiMP Target-Match Loss}{30}{section.5.3}%
+\contentsline {section}{\numberline {5.4}Template Blurring}{33}{section.5.4}%
+\contentsline {chapter}{\numberline {6}Experimental Setup}{35}{chapter.6}%
+\contentsline {section}{\numberline {6.1}Dataset and protocol}{35}{section.6.1}%
+\contentsline {section}{\numberline {6.2}Model configuration}{35}{section.6.2}%
+\contentsline {section}{\numberline {6.3}Evaluation protocol}{36}{section.6.3}%
+\contentsline {chapter}{\numberline {7}Results and Discussion}{37}{chapter.7}%
+\contentsline {section}{\numberline {7.1}Quantitative Results}{37}{section.7.1}%
+\contentsline {section}{\numberline {7.2}Training Dynamics}{38}{section.7.2}%
+\contentsline {section}{\numberline {7.3}Limitations and Future Work}{40}{section.7.3}%
+\contentsline {chapter}{\numberline {8}Tracking Examples}{42}{chapter.8}%
+\contentsline {chapter}{Conclusion}{44}{chapter*.11}%
+\contentsline {chapter}{References}{46}{section*.12}%
+\contentsline {chapter}{References}{46}{chapter*.13}%
+\contentsline {chapter}{Summary}{49}{chapter*.14}%
+\contentsline {chapter}{Abbreviations}{51}{chapter*.16}%
