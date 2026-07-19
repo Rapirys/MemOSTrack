@@ -160,7 +160,7 @@ class VisionTransformerCE(VisionTransformer):
         M_layers_out = None
         if self.memory_tokens > 0:
             use_gru = (mem_tokens is not None) and (not is_first_frame)
-            M_prev_layers = self._prepare_layer_memory(mem_tokens, B, x.device, x.dtype)
+            M_prev_frame_layers = self._prepare_layer_memory(mem_tokens, B, x.device, x.dtype)
 
             if mask_x is not None:
                 mem_mask = torch.zeros([B, self.memory_tokens], device=x.device, dtype=mask_x.dtype)
@@ -170,9 +170,6 @@ class VisionTransformerCE(VisionTransformer):
                 mem_ce_mask = torch.zeros([B, self.memory_tokens], device=x.device, dtype=ce_template_mask.dtype)
                 ce_template_mask = torch.cat([mem_ce_mask, ce_template_mask], dim=1)
 
-            M_prev_layer = M_prev_layers[0]
-            if self.read_mem_embed is not None:
-                M_prev_layer = M_prev_layer + self.read_mem_embed.to(device=x.device, dtype=x.dtype)
             visual_tokens = x
             M_current_layers = []
 
@@ -192,7 +189,9 @@ class VisionTransformerCE(VisionTransformer):
         removed_indexes_s = []
         for l, blk in enumerate(self.blocks):
             if self.memory_tokens > 0:
-                M_in = M_prev_layer
+                M_prev_frame_layer = self._select_prev_frame_memory_for_layer(
+                    l, M_prev_frame_layers, B, x.device, x.dtype)
+                M_in = self._add_read_mem_embed(M_prev_frame_layer, x.device, x.dtype)
                 x = torch.cat([M_in, visual_tokens], dim=1)
 
             x, global_index_t, global_index_s, removed_index_s, attn = \
@@ -202,15 +201,12 @@ class VisionTransformerCE(VisionTransformer):
                 M_hat = x[:, :self.memory_tokens, :]
                 visual_tokens = x[:, self.memory_tokens:, :]
                 if use_gru:
-                    M_prev_time = M_prev_layers[l]
-                    M_current = self._update_memory_with_two_gru(l, M_prev_time, M_prev_layer, M_hat)
+                    M_current = self._update_memory_with_gru(l, M_prev_frame_layer, M_hat)
                 else:
                     M_current = M_hat
                     if self.mem_norms is not None and l < len(self.mem_norms):
                         M_current = self.mem_norms[l](M_current)
                 M_current_layers.append(M_current)
-
-                M_prev_layer = M_current
 
             if self.ce_loc is not None and l in self.ce_loc:
                 removed_indexes_s.append(removed_index_s)

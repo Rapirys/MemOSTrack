@@ -38,7 +38,6 @@ class BaseBackbone(nn.Module):
         self.memory_tokens = 0
         self.mem_token_embed = None
         self.read_mem_embed = None
-        self.mem_grus_time = None
         self.mem_grus_depth = None
         self.mem_norms = None
 
@@ -125,9 +124,6 @@ class BaseBackbone(nn.Module):
             self.read_mem_embed = nn.Parameter(torch.zeros(1, self.memory_tokens, self.embed_dim))
             trunc_normal_(self.read_mem_embed, std=.02)
             num_layers = self._num_backbone_blocks()
-            self.mem_grus_time = nn.ModuleList([
-                nn.GRUCell(self.embed_dim, self.embed_dim) for _ in range(num_layers)
-            ])
             self.mem_grus_depth = nn.ModuleList([
                 nn.GRUCell(self.embed_dim, self.embed_dim) for _ in range(num_layers)
             ])
@@ -137,7 +133,6 @@ class BaseBackbone(nn.Module):
         else:
             self.mem_token_embed = None
             self.read_mem_embed = None
-            self.mem_grus_time = None
             self.mem_grus_depth = None
             self.mem_norms = None
 
@@ -181,29 +176,36 @@ class BaseBackbone(nn.Module):
             )
         return mem_tokens
 
-    def _update_memory_with_two_gru(self, layer_idx, M_prev_time, M_prev_layer, M_hat):
+    def _select_prev_frame_memory_for_layer(self, layer_idx, M_prev_frame_layers, batch_size, device, dtype):
+        if M_prev_frame_layers is None:
+            return self._init_memory(batch_size, device=device, dtype=dtype)
+        if layer_idx == 0:
+            return M_prev_frame_layers[-1]
+        return M_prev_frame_layers[layer_idx - 1]
+
+    def _add_read_mem_embed(self, memory_tokens, device, dtype):
+        if self.read_mem_embed is None:
+            raise RuntimeError("read_mem_embed must be initialized when memory tokens are enabled.")
+        return memory_tokens + self.read_mem_embed.to(device=device, dtype=dtype)
+
+    def _update_memory_with_gru(self, layer_idx, M_prev_frame_layer, M_hat):
         if (
-            self.mem_grus_time is None
-            or self.mem_grus_depth is None
-            or layer_idx >= len(self.mem_grus_time)
+            self.mem_grus_depth is None
             or layer_idx >= len(self.mem_grus_depth)
         ):
             return M_hat
 
-        if M_prev_time.shape != M_hat.shape or M_prev_layer.shape != M_hat.shape:
+        if M_prev_frame_layer.shape != M_hat.shape:
             raise ValueError(
-                "M_prev_time, M_prev_layer, and M_hat must have same shape, "
-                f"got {tuple(M_prev_time.shape)}, {tuple(M_prev_layer.shape)}, and {tuple(M_hat.shape)}"
+                "M_prev_frame_layer and M_hat must have same shape, "
+                f"got {tuple(M_prev_frame_layer.shape)} and {tuple(M_hat.shape)}"
             )
 
-        B, K, C = M_prev_time.shape
-        h_time_prev = M_prev_time.reshape(B * K, C)      # M_{t-1,l}
-        x_time_in = M_hat.reshape(B * K, C)              # M_hat_{t,l}
-        h_time = self.mem_grus_time[layer_idx](x_time_in, h_time_prev)  # T_{t,l}
-
-        h_depth_prev = M_prev_layer.reshape(B * K, C)    # M_{t,l-1}
-        h_depth = self.mem_grus_depth[layer_idx](h_time, h_depth_prev)  # M_{t,l}
-        M_current = h_depth.reshape(B, K, C)
+        B, K, C = M_prev_frame_layer.shape
+        x_gru_in = M_hat.reshape(B * K, C)              # M_hat_{t,l}
+        h_gru_prev = M_prev_frame_layer.reshape(B * K, C)  # M^-_{t,l}
+        h_gru = self.mem_grus_depth[layer_idx](x_gru_in, h_gru_prev)  # M_{t,l}
+        M_current = h_gru.reshape(B, K, C)
         if self.mem_norms is not None and layer_idx < len(self.mem_norms):
             M_current = self.mem_norms[layer_idx](M_current)
 
@@ -236,18 +238,17 @@ class BaseBackbone(nn.Module):
         M_layers_out = None
         if self.memory_tokens > 0:
             use_gru = (mem_tokens is not None) and (not is_first_frame)
-            M_prev_layers = self._prepare_layer_memory(mem_tokens, B, x.device, x.dtype)
+            M_prev_frame_layers = self._prepare_layer_memory(mem_tokens, B, x.device, x.dtype)
 
-            self.debug_print_memtokens_shape(M_prev_layers, mem_tokens, x)
+            self.debug_print_memtokens_shape(M_prev_frame_layers, mem_tokens, x)
 
-            M_prev_layer = M_prev_layers[0]
-            if self.read_mem_embed is not None:
-                M_prev_layer = M_prev_layer + self.read_mem_embed.to(device=x.device, dtype=x.dtype)
             visual_tokens = x
             M_current_layers = []
 
             for l, blk in enumerate(self.blocks):
-                M_in = M_prev_layer
+                M_prev_frame_layer = self._select_prev_frame_memory_for_layer(
+                    l, M_prev_frame_layers, B, x.device, x.dtype)
+                M_in = self._add_read_mem_embed(M_prev_frame_layer, x.device, x.dtype)
                 x = torch.cat([M_in, visual_tokens], dim=1)
 
                 x = blk(x)
@@ -255,15 +256,12 @@ class BaseBackbone(nn.Module):
                 visual_tokens = x[:, self.memory_tokens:, :]
 
                 if use_gru:
-                    M_prev_time = M_prev_layers[l]
-                    M_current = self._update_memory_with_two_gru(l, M_prev_time, M_prev_layer, M_hat)
+                    M_current = self._update_memory_with_gru(l, M_prev_frame_layer, M_hat)
                 else:
                     M_current = M_hat
                     if self.mem_norms is not None and l < len(self.mem_norms):
                         M_current = self.mem_norms[l](M_current)
                 M_current_layers.append(M_current)
-
-                M_prev_layer = M_current
 
             x = torch.cat([M_current, visual_tokens], dim=1)
             M_layers_out = torch.stack(M_current_layers, dim=0)
