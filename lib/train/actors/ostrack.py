@@ -230,10 +230,12 @@ class OSTrackActor(BaseActor):
                 end_prob=self.rollout_teacher_prob_end,
                 anneal_epochs=self.rollout_teacher_anneal_epochs,
             )
-            blur_mask = self.memory_template_corruption.build_mask(num_search, batch_size, search_images.device)
+            template_corrupt_mask, full_corrupt_mask = self.memory_template_corruption.build_masks(
+                num_search, batch_size, search_images.device)
         else:
             teacher_prob = 0.0
-            blur_mask = torch.zeros((num_search, batch_size), dtype=torch.bool, device=search_images.device)
+            template_corrupt_mask = torch.zeros((num_search, batch_size), dtype=torch.bool, device=search_images.device)
+            full_corrupt_mask = torch.zeros((num_search, batch_size), dtype=torch.bool, device=search_images.device)
         out_dict = []
         shared_search_jitter = None
         if use_crop_jitter and (not self.search_per_frame_jitter):
@@ -250,12 +252,16 @@ class OSTrackActor(BaseActor):
 
             search_img = search_images[i].view(-1, *search_img_shape)  # (batch, 3, Hf, Wf)
             search_img_full = search_img
-            frame_blur_mask = blur_mask[i]
+            frame_template_corrupt_mask = template_corrupt_mask[i]
+            frame_full_corrupt_mask = full_corrupt_mask[i]
             template_in = template_list
-            if frame_blur_mask.any():
-                blur_selector = frame_blur_mask.view(-1, 1, 1, 1)
-                blurred_template = self.memory_template_corruption.apply(template_list)
-                template_in = torch.where(blur_selector, blurred_template, template_list)
+            if frame_template_corrupt_mask.any():
+                template_corrupt_selector = frame_template_corrupt_mask.view(-1, 1, 1, 1)
+                corrupted_template = self.memory_template_corruption.apply(template_list)
+                template_in = torch.where(template_corrupt_selector, corrupted_template, template_list)
+            if frame_full_corrupt_mask.any():
+                template_full_corrupt_selector = frame_full_corrupt_mask.view(-1, 1, 1, 1)
+                template_in = torch.where(template_full_corrupt_selector, torch.zeros_like(template_in), template_in)
 
             if self.debug_save_seq:
                 dbg_img = search_img_full[0].detach().cpu().permute(1, 2, 0).clamp(0, 1)
@@ -277,9 +283,12 @@ class OSTrackActor(BaseActor):
                 search_img_full, crop_boxes_i, search_factor, search_size
             )
             search_img = self._normalize_image_batch(search_img)
+            if frame_full_corrupt_mask.any():
+                search_corrupt_selector = frame_full_corrupt_mask.view(-1, 1, 1, 1)
+                search_img = torch.where(search_corrupt_selector, torch.zeros_like(search_img), search_img)
 
             ce_keep_rate_i = ce_keep_rate
-            if frame_blur_mask.any() and self.cfg.MODEL.BACKBONE.CE_LOC:
+            if frame_template_corrupt_mask.any() and self.cfg.MODEL.BACKBONE.CE_LOC:
                 ce_keep_rate_i = 1.0
 
             out_i = self.net(
@@ -289,7 +298,7 @@ class OSTrackActor(BaseActor):
                 ce_keep_rate=ce_keep_rate_i,
                 return_last_attn=False,
                 mem_tokens=mem_tokens,
-                is_first_frame=is_first_frame
+                is_first_frame=is_first_frame,
             )
             is_first_frame = False
 
@@ -332,7 +341,10 @@ class OSTrackActor(BaseActor):
                 gt_crop_i.append(gt_crop_b)
             out_i['gt_box_in_crop'] = torch.stack(gt_crop_i, dim=0)
             out_i['gt_box_valid_in_crop'] = torch.stack(gt_valid_i, dim=0)
-            out_i['is_blurred_frame'] = bool(frame_blur_mask.any().item())
+            out_i['template_corrupt_mask'] = frame_template_corrupt_mask.detach()
+            out_i['full_corrupt_mask'] = frame_full_corrupt_mask.detach()
+            out_i['is_blurred_frame'] = bool(frame_template_corrupt_mask.any().item())
+            out_i['is_full_corrupt_frame'] = bool(frame_full_corrupt_mask.any().item())
             out_dict.append(out_i)
 
         #   print ("Debug: out_dict =", len(out_dict))
@@ -356,6 +368,47 @@ class OSTrackActor(BaseActor):
 
         device = pred_dict[0]['pred_boxes'].device
         frame_metrics = []
+        full_corrupt_frame_metrics = []
+
+        def _compute_frame_metrics_for_samples(pred_t, gt_bbox, gt_gaussian_maps, sample_mask):
+            sample_mask = sample_mask.to(device=device, dtype=torch.bool)
+            has_valid = bool(sample_mask.any().item())
+            if not has_valid:
+                return {
+                    "giou": torch.tensor(0.0, device=device),
+                    "l1": torch.tensor(0.0, device=device),
+                    "location": torch.tensor(0.0, device=device),
+                    "iou": 0.0,
+                    "has_valid": False,
+                    "valid_count": 0,
+                }
+
+            pred_boxes = pred_t['pred_boxes']
+            pred_boxes_valid = pred_boxes[sample_mask]
+            gt_bbox_valid = gt_bbox[sample_mask]
+            num_queries = pred_boxes_valid.size(1)
+            pred_boxes_vec = box_cxcywh_to_xyxy(pred_boxes_valid).view(-1, 4)
+            gt_boxes_vec = box_xywh_to_xyxy(gt_bbox_valid)[:, None, :].repeat((1, num_queries, 1)).view(-1, 4)
+            gt_boxes_vec = gt_boxes_vec.clamp(min=0.0, max=1.0)
+
+            giou_loss, iou = self.objective['giou'](pred_boxes_vec, gt_boxes_vec)
+            if (not torch.isfinite(giou_loss)) or (not torch.isfinite(iou).all()):
+                raise ValueError("Non-finite GIoU/IoU encountered during loss computation.")
+            l1_loss = self.objective['l1'](pred_boxes_vec, gt_boxes_vec)
+            if 'score_map' in pred_t:
+                location_loss = self.objective['focal'](pred_t['score_map'][sample_mask], gt_gaussian_maps[sample_mask])
+            else:
+                location_loss = torch.tensor(0.0, device=device)
+
+            return {
+                "giou": giou_loss,
+                "l1": l1_loss,
+                "location": location_loss,
+                "iou": float(iou.detach().mean().item()),
+                "has_valid": True,
+                "valid_count": int(sample_mask.sum().item()),
+            }
+
         # TODO: maybe add check that num_frames matches GT length
         for t in range(num_frames):
             # gt for frame t
@@ -369,44 +422,19 @@ class OSTrackActor(BaseActor):
             if torch.isnan(pred_boxes).any():
                 raise ValueError("Network outputs is NAN! Stop Training")
 
-            has_valid_t = bool(valid_t.any().item())
-            if has_valid_t:
-                pred_boxes_valid = pred_boxes[valid_t]
-                gt_bbox_valid = gt_bbox[valid_t]
-                num_queries = pred_boxes_valid.size(1)
-                pred_boxes_vec = box_cxcywh_to_xyxy(pred_boxes_valid).view(-1, 4)
-                gt_boxes_vec = box_xywh_to_xyxy(gt_bbox_valid)[:, None, :].repeat((1, num_queries, 1)).view(-1, 4)
-                gt_boxes_vec = gt_boxes_vec.clamp(min=0.0, max=1.0)
+            frame_metrics.append(_compute_frame_metrics_for_samples(pred_t, gt_bbox, gt_gaussian_maps, valid_t))
 
-                # compute giou and iou
-                giou_loss_t, iou_t = self.objective['giou'](pred_boxes_vec, gt_boxes_vec)  # (BN,4) (BN,4)
-                if (not torch.isfinite(giou_loss_t)) or (not torch.isfinite(iou_t).all()):
-                    raise ValueError("Non-finite GIoU/IoU encountered during loss computation.")
-                # compute l1 loss
-                l1_loss_t = self.objective['l1'](pred_boxes_vec, gt_boxes_vec)  # (BN,4) (BN,4)
-                # compute location loss for main head
-                if 'score_map' in pred_t:
-                    location_loss_t = self.objective['focal'](pred_t['score_map'][valid_t], gt_gaussian_maps[valid_t])
-                else:
-                    location_loss_t = torch.tensor(0.0, device=device)
-                iou_value_t = float(iou_t.detach().mean().item())
+            full_corrupt_mask = pred_t.get("full_corrupt_mask", None)
+            if full_corrupt_mask is None:
+                full_corrupt_mask = torch.zeros_like(valid_t, dtype=torch.bool, device=device)
             else:
-                giou_loss_t = torch.tensor(0.0, device=device)
-                l1_loss_t = torch.tensor(0.0, device=device)
-                location_loss_t = torch.tensor(0.0, device=device)
-                iou_value_t = 0.0
+                full_corrupt_mask = full_corrupt_mask.to(device=device, dtype=torch.bool) & valid_t
+            full_corrupt_frame_metrics.append(
+                _compute_frame_metrics_for_samples(pred_t, gt_bbox, gt_gaussian_maps, full_corrupt_mask)
+            )
 
-            frame_metrics.append({
-                "giou": giou_loss_t,
-                "l1": l1_loss_t,
-                "location": location_loss_t,
-                "iou": iou_value_t,
-                "has_valid": has_valid_t,
-                "valid_count": int(valid_t.sum().item()),
-            })
-
-        def _aggregate(indices):
-            indices = [idx for idx in indices if frame_metrics[idx]["has_valid"]]
+        def _aggregate(indices, metrics_source=frame_metrics):
+            indices = [idx for idx in indices if metrics_source[idx]["has_valid"]]
             if not indices:
                 return {
                     "giou": torch.tensor(0.0, device=device),
@@ -420,7 +448,7 @@ class OSTrackActor(BaseActor):
             sum_location = torch.tensor(0.0, device=device)
             sum_iou = 0.0
             for idx in indices:
-                m = frame_metrics[idx]
+                m = metrics_source[idx]
                 sum_giou = sum_giou + m["giou"]
                 sum_l1 = sum_l1 + m["l1"]
                 sum_location = sum_location + m["location"]
@@ -436,6 +464,9 @@ class OSTrackActor(BaseActor):
 
         all_indices = list(range(num_frames))
         blurred_indices = [i for i, pred_t in enumerate(pred_dict) if bool(pred_t.get("is_blurred_frame", False))]
+        full_corrupt_indices = [
+            i for i, pred_t in enumerate(pred_dict) if bool(pred_t.get("is_full_corrupt_frame", False))
+        ]
         clean_indices = [i for i in all_indices if i not in blurred_indices]
         if not clean_indices:
             clean_indices = all_indices
@@ -443,6 +474,7 @@ class OSTrackActor(BaseActor):
         all_stats = _aggregate(all_indices)
         clean_stats = _aggregate(clean_indices)
         blur_stats = _aggregate(blurred_indices)
+        full_corrupt_stats = _aggregate(full_corrupt_indices, full_corrupt_frame_metrics)
 
         memory_weight = self.memory_loss_weight
         if self.memory_loss_fn is not None and memory_weight > 0.0:
@@ -466,6 +498,9 @@ class OSTrackActor(BaseActor):
             blur_total = (self.loss_weight['giou'] * blur_stats["giou"]
                           + self.loss_weight['l1'] * blur_stats["l1"]
                           + self.loss_weight['focal'] * blur_stats["location"])
+            full_corrupt_total = (self.loss_weight['giou'] * full_corrupt_stats["giou"]
+                                  + self.loss_weight['l1'] * full_corrupt_stats["l1"]
+                                  + self.loss_weight['focal'] * full_corrupt_stats["location"])
 
             # Status for logs. Blurred-frame metrics are reported separately.
             status = {
@@ -486,6 +521,12 @@ class OSTrackActor(BaseActor):
                 "Blur/Loss/l1": blur_stats["l1"].item(),
                 "Blur/Loss/location": blur_stats["location"].item(),
                 "Blur/IoU": blur_stats["iou"].item(),
+                "FullCorrupt/frames": float(len(full_corrupt_indices)),
+                "FullCorrupt/Loss/total": full_corrupt_total.item(),
+                "FullCorrupt/Loss/giou": full_corrupt_stats["giou"].item(),
+                "FullCorrupt/Loss/l1": full_corrupt_stats["l1"].item(),
+                "FullCorrupt/Loss/location": full_corrupt_stats["location"].item(),
+                "FullCorrupt/IoU": full_corrupt_stats["iou"].item(),
             }
             return loss, status
         else:

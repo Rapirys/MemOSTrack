@@ -10,6 +10,7 @@ class MemoryTemplateCorruption:
     enabled: bool
     mode: str
     num_frames: int
+    full_corruption_num_frames: int
     kernel_size: int
     passes: int
     skip_first: int = 2
@@ -20,6 +21,7 @@ class MemoryTemplateCorruption:
             enabled=bool(getattr(train_cfg, "MEMORY_BLUR_ENABLED", False)),
             mode=str(getattr(train_cfg, "MEMORY_BLUR_MODE", "blur")).strip().lower(),
             num_frames=int(getattr(train_cfg, "MEMORY_BLUR_NUM_FRAMES", 2)),
+            full_corruption_num_frames=int(getattr(train_cfg, "MEMORY_FULL_CORRUPTION_NUM_FRAMES", 0)),
             kernel_size=int(getattr(train_cfg, "MEMORY_BLUR_KERNEL_SIZE", 19)),
             passes=int(getattr(train_cfg, "MEMORY_BLUR_PASSES", 2)),
             skip_first=2,
@@ -35,6 +37,13 @@ class MemoryTemplateCorruption:
 
         if self.num_frames <= 0:
             raise ValueError("TRAIN.MEMORY_BLUR_NUM_FRAMES must be > 0 when memory blur is enabled.")
+        if self.full_corruption_num_frames < 0:
+            raise ValueError("TRAIN.MEMORY_FULL_CORRUPTION_NUM_FRAMES must be >= 0.")
+        if self.full_corruption_num_frames > self.num_frames:
+            raise ValueError(
+                "TRAIN.MEMORY_FULL_CORRUPTION_NUM_FRAMES must be <= TRAIN.MEMORY_BLUR_NUM_FRAMES. "
+                "Got {} > {}.".format(self.full_corruption_num_frames, self.num_frames)
+            )
         if self.mode not in {"blur", "zero"}:
             raise ValueError(
                 "TRAIN.MEMORY_BLUR_MODE must be one of: blur, zero. "
@@ -90,18 +99,32 @@ class MemoryTemplateCorruption:
         selected = candidates[rand_idx].tolist()
         return set(int(i) for i in selected)
 
-    def build_mask(self, num_search: int, batch_size: int, device):
-        blur_mask = torch.zeros((num_search, batch_size), dtype=torch.bool, device=device)
+    def build_masks(self, num_search: int, batch_size: int, device):
+        template_corrupt_mask = torch.zeros((num_search, batch_size), dtype=torch.bool, device=device)
+        full_corrupt_mask = torch.zeros((num_search, batch_size), dtype=torch.bool, device=device)
         if not self.enabled:
-            return blur_mask
+            return template_corrupt_mask, full_corrupt_mask
 
-        for b in range(batch_size):
-            frame_indices = self.select_frame_indices(num_search)
-            if not frame_indices:
-                continue
-            idx_tensor = torch.tensor(sorted(frame_indices), dtype=torch.long, device=device)
-            blur_mask[idx_tensor, b] = True
-        return blur_mask
+        frame_indices = self.select_frame_indices(num_search)
+        if not frame_indices:
+            return template_corrupt_mask, full_corrupt_mask
+
+        frame_indices = sorted(frame_indices)
+        idx_tensor = torch.tensor(frame_indices, dtype=torch.long, device=device)
+        template_corrupt_mask[idx_tensor, :] = True
+
+        if self.full_corruption_num_frames > 0:
+            full_count = min(self.full_corruption_num_frames, len(frame_indices))
+            full_perm = torch.randperm(len(frame_indices))[:full_count]
+            full_indices = [frame_indices[int(i)] for i in full_perm.tolist()]
+            full_idx_tensor = torch.tensor(sorted(full_indices), dtype=torch.long, device=device)
+            full_corrupt_mask[full_idx_tensor, :] = True
+
+        return template_corrupt_mask, full_corrupt_mask
+
+    def build_mask(self, num_search: int, batch_size: int, device):
+        template_corrupt_mask, _ = self.build_masks(num_search, batch_size, device)
+        return template_corrupt_mask
 
     def apply(self, template_tensor: torch.Tensor):
         if self.mode == "zero":
