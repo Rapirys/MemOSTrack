@@ -196,7 +196,7 @@ class LTRTrainer(BaseTrainer):
     def train_epoch(self):
         """Do one epoch for each loader."""
         for loader in self.loaders:
-            if self.epoch % loader.epoch_interval == 0:
+            if self._should_run_loader(loader):
                 # 2021.1.10 Set epoch
                 if isinstance(loader.sampler, DistributedSampler):
                     loader.sampler.set_epoch(self.epoch)
@@ -205,6 +205,17 @@ class LTRTrainer(BaseTrainer):
         self._stats_new_epoch()
         if self.settings.local_rank in [-1, 0]:
             self._write_tensorboard()
+
+    def _should_run_loader(self, loader):
+        interval = max(1, int(getattr(loader, "epoch_interval", 1)))
+        if loader.training:
+            return self.epoch % interval == 0
+
+        max_epochs = getattr(self, "max_epochs", None)
+        if max_epochs is not None and self.epoch > max_epochs - 15:
+            return True
+
+        return self.epoch % interval == 0
 
     def _init_timing(self):
         self.num_frames = 0
