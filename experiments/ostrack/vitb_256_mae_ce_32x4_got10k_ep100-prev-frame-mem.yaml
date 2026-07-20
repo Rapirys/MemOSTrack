@@ -10,7 +10,7 @@ DATA:
     FACTOR: 4.0
     SCALE_JITTER: 0.1
     SIZE: 256
-    NUMBER: 20
+    NUMBER: 15
   STD:
   - 0.229
   - 0.224
